@@ -36,7 +36,7 @@ static size_t ffmpeg_buffer_size;
 static int image_width, image_height, surface_width, surface_height, pixel_size;
 static u8 *rgb_img_buffer;
 
-static std::unique_ptr<N3dsRendererBase> renderer = nullptr;
+static std::unique_ptr<IN3dsRenderer> renderer = nullptr;
 enum n3ds_render_type N3DS_RENDER_TYPE = RENDER_DEFAULT;
 
 static int n3ds_setup(int videoFormat, int width, int height, int redrawRate,
@@ -99,6 +99,11 @@ static int n3ds_setup(int videoFormat, int width, int height, int redrawRate,
         break;
     case (RENDER_DUAL_SCREEN_MIRROR):
         renderer = std::make_unique<N3dsRendererDualScreenMirror>(
+            surface_width, surface_height, image_width, image_height,
+            pixel_size);
+        break;
+    case (RENDER_DUAL_SCREEN_MAGNIFY):
+        renderer = std::make_unique<N3dsRendererDualScreenMagnify>(
             surface_width, surface_height, image_width, image_height,
             pixel_size);
         break;

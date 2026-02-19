@@ -32,8 +32,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N3DS_DEC_BUFF_SIZE 23
-
 // General decoder and renderer state
 static void *nal_unit_buffer;
 static size_t nal_unit_buffer_size;
@@ -43,7 +41,8 @@ static int image_width, image_height, surface_width, surface_height, pixel_size;
 static u8 *rgb_img_buffer;
 static bool first_frame = true;
 
-static std::unique_ptr<N3dsRendererBase> renderer = nullptr;
+static std::unique_ptr<IN3dsRenderer> renderer = nullptr;
+N3dsRendererDualScreenMagnify *magnify_renderer_instance = nullptr;
 
 static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
                      void *context, int drFlags) {
@@ -54,10 +53,27 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
         return -1;
     }
 
+    // Calculate required buffer size
+    MVDSTD_CalculateWorkBufSizeConfig config = {
+        0,
+    };
+    config.level.enable = true;
+    config.level.flag = (MVD_CALC_WITH_LEVEL_FLAG_ENABLE_CALC |
+                         MVD_CALC_WITH_LEVEL_FLAG_ENABLE_EXTRA_OP |
+                         MVD_CALC_WITH_LEVEL_FLAG_UNK);
+    config.level.level = MVD_H264_LEVEL_4_2;
+    config.width = width;
+    config.height = height;
+    uint32_t size = 0;
+    int status = mvdstdCalculateBufferSize(&config, &size);
+    if (status) {
+        fprintf(stderr, "mvdstdCalculateBufferSize failed: %d\n", status);
+        return -1;
+    }
+
     first_frame = true;
-    int status =
-        mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264, MVD_OUTPUT_BGR565,
-                   width * height * N3DS_DEC_BUFF_SIZE, NULL);
+    status = mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264,
+                        MVD_OUTPUT_BGR565, size, NULL);
     if (status) {
         fprintf(stderr, "mvdstdInit failed: %d\n", status);
         mvdstdExit();
@@ -72,8 +88,9 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     }
 
     GSPGPU_FramebufferFormat px_fmt = gfxGetScreenFormat(GFX_TOP);
-    image_width = width;
-    image_height = height;
+    image_width = (width < MOON_CTR_VIDEO_TEX_W) ? width : MOON_CTR_VIDEO_TEX_W;
+    image_height =
+        (height < MOON_CTR_VIDEO_TEX_H) ? height : MOON_CTR_VIDEO_TEX_H;
     pixel_size = gspGetBytesPerPixel(px_fmt);
     rgb_img_buffer = (u8 *)linearAlloc(MOON_CTR_VIDEO_TEX_W *
                                        MOON_CTR_VIDEO_TEX_H * pixel_size);
@@ -85,9 +102,9 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     ensure_linear_buf_size(&nal_unit_buffer, &nal_unit_buffer_size,
                            INITIAL_DECODER_BUFFER_SIZE +
                                AV_INPUT_BUFFER_PADDING_SIZE);
-    mvdstdGenerateDefaultConfig(&mvdstd_config, image_width, image_height,
-                                image_width, image_height, NULL,
-                                (u32 *)rgb_img_buffer, NULL);
+    mvdstdGenerateDefaultConfig(&mvdstd_config, width, height, image_width,
+                                image_height, NULL, (u32 *)rgb_img_buffer,
+                                NULL);
 
     // Place within the 1024x512 buffer
     mvdstd_config.flag_x104 = 1;
@@ -110,6 +127,13 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
             surface_width, surface_height, image_width, image_height,
             pixel_size);
         break;
+    case (RENDER_DUAL_SCREEN_MAGNIFY):
+        renderer = std::make_unique<N3dsRendererDualScreenMagnify>(
+            surface_width, surface_height, image_width, image_height,
+            pixel_size);
+        magnify_renderer_instance =
+            static_cast<N3dsRendererDualScreenMagnify *>(renderer.get());
+        break;
     default:
         renderer = std::make_unique<N3dsRendererTop>(
             surface_width, surface_height, image_width, image_height,
@@ -126,6 +150,7 @@ static void n3ds_destroy(void) {
     mvdstdExit();
     linearFree(nal_unit_buffer);
     linearFree(rgb_img_buffer);
+    magnify_renderer_instance = nullptr;
     renderer = nullptr;
 }
 
@@ -156,7 +181,7 @@ static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
     GSPGPU_FlushDataCache(nal_unit_buffer, length);
 
     n3ds_decode((unsigned char *)nal_unit_buffer, length);
-    renderer->perf_decode_ticks = svcGetSystemTick() - start_ticks;
+    renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
 
     renderer->write_px_to_framebuffer(rgb_img_buffer);
 

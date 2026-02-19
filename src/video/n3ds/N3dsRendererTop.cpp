@@ -18,7 +18,6 @@
  */
 
 #include "N3dsRenderer.hpp"
-#include "vshader_shbin.h"
 
 #include <3ds.h>
 #include <cstdlib>
@@ -43,4 +42,8 @@ void N3dsRendererTop::write_px_to_framebuffer(uint8_t *source) {
         ensure_3d_disabled();
     }
     write_px_to_framebuffer_gpu(source);
+}
+
+void N3dsRendererTop::set_perf_decode_ticks(u64 ticks) {
+    perf_decode_ticks = ticks;
 }

@@ -1,7 +1,7 @@
 /*
  * This file is part of Moonlight Embedded.
  *
- * Copyright (C) 2015 Iwan Timmer
+ * Copyright (C) 2015-2017 Iwan Timmer
  *
  * Moonlight is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,25 +17,19 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "N3dsRenderer.hpp"
+#include "N3dsTouchscreenInput.hpp"
+#include <Limelight.h>
 
-#include <cstdlib>
-#include <cstring>
-#include <stdbool.h>
-#include <stdexcept>
-#include <unistd.h>
-
-N3dsRendererBottom::N3dsRendererBottom(int src_width, int src_height,
-                                       int px_size, bool debug_in)
-    : N3dsRendererBase(GFX_BOTTOM, GSP_SCREEN_HEIGHT_BOTTOM, GSP_SCREEN_WIDTH,
-                       src_width, src_height, px_size, debug_in) {}
-
-N3dsRendererBottom::~N3dsRendererBottom() {}
-
-void N3dsRendererBottom::write_px_to_framebuffer(uint8_t *source) {
-    write_px_to_framebuffer_gpu(source);
+void MagnifyTouchHandler::_handle_touch_down(touchPosition touch) {
+    if (magnify_renderer_instance) {
+        magnify_renderer_instance->set_crop_region(touch.px, touch.py);
+    }
 }
 
-void N3dsRendererBottom::set_perf_decode_ticks(u64 ticks) {
-    perf_decode_ticks = ticks;
+void MagnifyTouchHandler::_handle_touch_up(touchPosition touch) {}
+
+void MagnifyTouchHandler::_handle_touch_hold(touchPosition touch) {
+    if (magnify_renderer_instance) {
+        magnify_renderer_instance->set_crop_region(touch.px, touch.py);
+    }
 }

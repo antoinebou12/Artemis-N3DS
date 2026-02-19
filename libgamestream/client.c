@@ -754,7 +754,7 @@ int gs_start_app(PSERVER_DATA server, STREAM_CONFIGURATION *config, int appId, b
   else
     goto cleanup;
 
-  if ((ret = xml_status(data->memory, data->size) != GS_OK))
+  if ((ret = xml_status(data->memory, data->size)) != GS_OK)
     goto cleanup;
   else if ((ret = xml_search(data->memory, data->size, "gamesession", &result)) != GS_OK &&
            (ret = xml_search(data->memory, data->size, "resume", &result)) != GS_OK)
@@ -797,7 +797,7 @@ int gs_quit_app(PSERVER_DATA server) {
   if ((ret = http_request(url, data)) != GS_OK)
     goto cleanup;
 
-  if ((ret = xml_status(data->memory, data->size) != GS_OK))
+  if ((ret = xml_status(data->memory, data->size)) != GS_OK)
     goto cleanup;
   else if ((ret = xml_search(data->memory, data->size, "cancel", &result)) != GS_OK)
     goto cleanup;
@@ -837,6 +837,10 @@ void gs_cleanup() {
   if (cert != NULL)
     X509_free(cert);
   if (privateKey != NULL)
+  {
     EVP_PKEY_free(privateKey);
+    // Set to NULL to avoid reconnection issues
+    privateKey = NULL;
+  }
   http_cleanup();
 }
