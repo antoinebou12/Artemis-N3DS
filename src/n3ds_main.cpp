@@ -17,11 +17,7 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifdef __3DS__
-
 #include "config.h"
-#include "loop.h"
-#include "platform_main.h"
 
 #include "n3ds/n3ds_connection.hpp"
 #include "n3ds/pair_record.hpp"
@@ -394,18 +390,21 @@ static int prompt_for_app_id(PSERVER_DATA server) {
     return app_ids[id_idx];
 }
 
-static inline void stream_loop(PCONFIGURATION config) {
+static inline void stream_loop(PCONFIGURATION config,
+                               N3dsConnectionListener *connection_listener,
+                               std::shared_ptr<N3dsInput> input_handler) {
     bool done = false;
     while (!done && aptMainLoop()) {
-        done = n3ds_connection_closed;
+        done = connection_listener->connection_closed;
         if (!config->viewonly) {
-            done |= n3dsinput_handle_event();
+            done |= input_handler->n3dsinput_handle_event();
         }
         hidWaitForAnyEvent(true, 0, 1000000000);
     }
 }
 
-static void stream(PSERVER_DATA server, PCONFIGURATION config, int appId) {
+static void stream(PSERVER_DATA server, PCONFIGURATION config, int appId,
+                   std::shared_ptr<N3dsInput> input_handler) {
     int gamepad_mask = 1;
     int ret = gs_start_app(server, &config->stream, appId, config->sops,
                            config->localaudio, gamepad_mask);
@@ -430,64 +429,48 @@ static void stream(PSERVER_DATA server, PCONFIGURATION config, int appId) {
         return;
     }
 
-    n3ds_audio_disabled = config->localaudio;
-    n3ds_connection_debug = config->debug_level;
-    N3DS_RENDER_TYPE = static_cast<n3ds_render_type>(config->display_type);
+    VideoRendererContext video_context = {
+        .type = static_cast<N3dsRenderType>(config->display_type),
+    };
 
-    int drFlags = 0;
-    if (config->fullscreen)
-        drFlags |= DISPLAY_FULLSCREEN;
-
-    switch (config->rotate) {
-    case 0:
-        break;
-    case 90:
-        drFlags |= DISPLAY_ROTATE_90;
-        break;
-    case 180:
-        drFlags |= DISPLAY_ROTATE_180;
-        break;
-    case 270:
-        drFlags |= DISPLAY_ROTATE_270;
-        break;
-    default:
-        printf("Ignoring invalid rotation value: %d\n", config->rotate);
-    }
-
-    n3ds_connection_closed = false;
-    n3ds_enable_motion = config->motion_controls;
+    AUDIO_RENDERER_CALLBACKS *audio_callbacks =
+        config->localaudio ? &audio_callbacks_n3ds : &audio_callbacks_mock;
     PDECODER_RENDERER_CALLBACKS video_callbacks =
         config->hwdecode ? &decoder_callbacks_n3ds_mvd
                          : &decoder_callbacks_n3ds;
 
     printf(
         "Loading...\nStream %dx%d, %dfps, %dkbps, sops=%d, localaudio=%d, quitappafter=%d,\
- viewonly=%d, rotate=%d, encryption=%x, hwdecode=%d, swapfacebuttons=%d, swaptriggersandshoulders=%d,\
+ viewonly=%d, encryption=%x, hwdecode=%d, swapfacebuttons=%d, swaptriggersandshoulders=%d,\
  usetriggersformouse=%d, display_type=%d, motion_controls=%d, debug=%d\n",
         config->stream.width, config->stream.height, config->stream.fps,
         config->stream.bitrate, config->sops, config->localaudio,
-        config->quitappafter, config->viewonly, config->rotate,
-        config->stream.encryptionFlags, config->hwdecode,
-        config->swap_face_buttons, config->swap_triggers_and_shoulders,
-        config->use_triggers_for_mouse, config->display_type,
-        config->motion_controls, config->debug_level);
+        config->quitappafter, config->viewonly, config->stream.encryptionFlags,
+        config->hwdecode, config->swap_face_buttons,
+        config->swap_triggers_and_shoulders, config->use_triggers_for_mouse,
+        config->display_type, config->motion_controls, config->debug_level);
 
-    int status = LiStartConnection(&server->serverInfo, &config->stream,
-                                   &n3ds_connection_callbacks, video_callbacks,
-                                   &audio_callbacks_n3ds, NULL, drFlags,
-                                   config->audio_device, 0);
+    auto connection_listener = N3dsConnectionListener::create_instance(
+        config->debug_level, config->motion_controls);
+    int status =
+        LiStartConnection(&server->serverInfo, &config->stream,
+                          &connection_listener->n3ds_connection_callbacks,
+                          video_callbacks, audio_callbacks, &video_context,
+                          DISPLAY_FULLSCREEN, config->audio_device, 0);
 
     if (status != 0) {
-        n3ds_connection_callbacks.connectionTerminated(status);
+        connection_listener->n3ds_connection_callbacks.connectionTerminated(
+            status);
         printf("Connection failed with error: %d\n", status);
         wait_for_button();
         return;
     }
 
     printf("Connected!\n");
-    stream_loop(config);
+    stream_loop(config, connection_listener, input_handler);
 
     LiStopConnection();
+    N3dsConnectionListener::destroy_instance();
 
     if (config->quitappafter) {
         printf("Sending app quit request ...\n");
@@ -557,20 +540,18 @@ static void action_stream(CONFIGURATION *config, SERVER_DATA *server) {
         touch_type = GAMEPAD;
     }
 
+    std::shared_ptr<N3dsInput> input_handler = nullptr;
     if (config->viewonly) {
         if (config->debug_level > 0)
             printf("View-only mode enabled, no input will be sent "
                    "to the host computer\n");
     } else {
-        n3dsinput_init(touch_type, config->swap_face_buttons,
-                       config->swap_triggers_and_shoulders,
-                       config->use_triggers_for_mouse);
+        input_handler =
+            std::make_shared<N3dsInput>(touch_type, config->swap_face_buttons,
+                                        config->swap_triggers_and_shoulders,
+                                        config->use_triggers_for_mouse);
     }
-    stream(server, config, appId);
-
-    if (!config->viewonly) {
-        n3dsinput_cleanup();
-    }
+    stream(server, config, appId, input_handler);
 }
 
 static void action_pair(CONFIGURATION *config, SERVER_DATA *server) {
@@ -691,5 +672,3 @@ int main(int argc, char *argv[]) {
     }
     return 0;
 }
-
-#endif

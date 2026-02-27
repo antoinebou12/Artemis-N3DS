@@ -16,13 +16,15 @@
  * You should have received a copy of the GNU General Public License
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
+#pragma once
 
+#include "../../system/subscriber.hpp"
 #include <3ds.h>
 #include <Limelight.h>
 #include <memory>
 
 #define MOON_CTR_VIDEO_TEX_W 1024
-#define MOON_CTR_VIDEO_TEX_H 1024
+#define MOON_CTR_VIDEO_TEX_H 512
 // TODO: No idea why, but this seems to be the magic number to make dual screen
 // offsets work
 #define MOON_CTR_VIDEO_TEX_H_OFFSET 32
@@ -51,13 +53,6 @@ class N3dsRendererBase {
   protected:
     inline void draw_perf_counters();
     void write_px_to_framebuffer_gpu(uint8_t *__restrict source);
-    // Refactor helpers for write_px_to_framebuffer_gpu
-    void tile_source_to_vram(uint8_t *__restrict source);
-    void build_and_submit_gpu_cmdlist_for_transform();
-    void upload_vertex_attributes_and_draw();
-    void process_cmdlist_and_wait();
-    void copy_vram_to_framebuffer_to_screen(uint8_t *__restrict source);
-    void finalize_frame_and_swap(u64 start_ticks);
     void ensure_3d_enabled();
     void ensure_3d_disabled();
     inline void write24(u8 *p, u32 val);
@@ -120,7 +115,7 @@ class N3dsRendererDualScreenMirror : public IN3dsRenderer {
     N3dsRendererBottom bottom_renderer;
 };
 
-class N3dsRendererDualScreenMagnify : public IN3dsRenderer {
+class N3dsRendererDualScreenMagnify : public IN3dsRenderer, ISubscriber {
   public:
     N3dsRendererDualScreenMagnify(int dest_width, int dest_height,
                                   int src_width, int src_height, int px_size);
@@ -128,6 +123,7 @@ class N3dsRendererDualScreenMagnify : public IN3dsRenderer {
     void write_px_to_framebuffer(uint8_t *source);
     void set_perf_decode_ticks(u64 ticks);
     void set_crop_region(int center_x, int center_y);
+    void accept(IMessage *message) override;
 
   private:
     int image_width;
@@ -137,7 +133,3 @@ class N3dsRendererDualScreenMagnify : public IN3dsRenderer {
     N3dsRendererBottom bottom_renderer;
     int pixel_offset = 0;
 };
-
-extern N3dsRendererDualScreenMagnify
-    *magnify_renderer_instance; // TODO: Gross, replace this and other externs
-                                // with intra-component messaging system

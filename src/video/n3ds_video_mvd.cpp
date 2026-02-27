@@ -42,7 +42,6 @@ static u8 *rgb_img_buffer;
 static bool first_frame = true;
 
 static std::unique_ptr<IN3dsRenderer> renderer = nullptr;
-N3dsRendererDualScreenMagnify *magnify_renderer_instance = nullptr;
 
 static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
                      void *context, int drFlags) {
@@ -81,16 +80,14 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     }
 
     surface_height = GSP_SCREEN_WIDTH;
-    if (width > GSP_SCREEN_HEIGHT_TOP) {
-        surface_width = GSP_SCREEN_HEIGHT_TOP_2X;
-    } else {
-        surface_width = GSP_SCREEN_HEIGHT_TOP;
-    }
+    surface_width = width > GSP_SCREEN_HEIGHT_TOP ? GSP_SCREEN_HEIGHT_TOP_2X
+                                                  : GSP_SCREEN_HEIGHT_TOP;
+    // Clamp output image to max dimensions supported by the renderer
+    image_width = width > MOON_CTR_VIDEO_TEX_W ? MOON_CTR_VIDEO_TEX_W : width;
+    image_height =
+        height > MOON_CTR_VIDEO_TEX_H ? MOON_CTR_VIDEO_TEX_H : height;
 
     GSPGPU_FramebufferFormat px_fmt = gfxGetScreenFormat(GFX_TOP);
-    image_width = (width < MOON_CTR_VIDEO_TEX_W) ? width : MOON_CTR_VIDEO_TEX_W;
-    image_height =
-        (height < MOON_CTR_VIDEO_TEX_H) ? height : MOON_CTR_VIDEO_TEX_H;
     pixel_size = gspGetBytesPerPixel(px_fmt);
     rgb_img_buffer = (u8 *)linearAlloc(MOON_CTR_VIDEO_TEX_W *
                                        MOON_CTR_VIDEO_TEX_H * pixel_size);
@@ -112,7 +109,8 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     mvdstd_config.output_height_override = MOON_CTR_VIDEO_TEX_H;
     MVDSTD_SetConfig(&mvdstd_config);
 
-    switch (N3DS_RENDER_TYPE) {
+    VideoRendererContext *renderer_context = (VideoRendererContext *)context;
+    switch (renderer_context->type) {
     case (RENDER_BOTTOM):
         renderer = std::make_unique<N3dsRendererBottom>(
             image_width, image_height, pixel_size);
@@ -131,8 +129,6 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
         renderer = std::make_unique<N3dsRendererDualScreenMagnify>(
             surface_width, surface_height, image_width, image_height,
             pixel_size);
-        magnify_renderer_instance =
-            static_cast<N3dsRendererDualScreenMagnify *>(renderer.get());
         break;
     default:
         renderer = std::make_unique<N3dsRendererTop>(
@@ -150,7 +146,6 @@ static void n3ds_destroy(void) {
     mvdstdExit();
     linearFree(nal_unit_buffer);
     linearFree(rgb_img_buffer);
-    magnify_renderer_instance = nullptr;
     renderer = nullptr;
 }
 
