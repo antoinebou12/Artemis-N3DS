@@ -19,17 +19,19 @@
 
 #pragma once
 
+#include "../system/AtomicVar.hpp"
 #include "../system/subscriber.hpp"
-#include "n3ds/N3dsTouchscreenInput.hpp"
+#include "touch/N3dsTouchscreenInput.hpp"
 #include <stdbool.h>
 
 class N3dsInput : public ISubscriber {
   public:
-    N3dsInput(N3dsTouchType touch_type, bool swap_face_buttons,
+    N3dsInput(int image_width, int image_height, bool swap_face_buttons,
               bool swap_triggers_and_shoulders, bool use_triggers_for_mouse_in);
     ~N3dsInput();
     void accept(IMessage *msg) override;
-    int n3dsinput_handle_event();
+    void n3dsinput_handle_event();
+    void force_touchscreen_menu();
 
   private:
     void _add_gamepad();
@@ -47,9 +49,10 @@ class N3dsInput : public ISubscriber {
     // Note: This was found experimentally and may need a calibration option in
     // settings
     float accel_coeff = 52.0;
-    bool enable_gyro = false;
-    bool enable_accel = false;
+    AtomicVar<bool> enable_gyro = false;
+    AtomicVar<bool> enable_accel = false;
     bool use_triggers_for_mouse = false;
+    bool menu_active = false;
 
     uint32_t CUSTOM_KEY_A;
     uint32_t CUSTOM_KEY_B;

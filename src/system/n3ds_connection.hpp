@@ -19,19 +19,21 @@
 
 #pragma once
 
+#include "../system/AtomicVar.hpp"
+#include "../system/subscriber.hpp"
 #include <Limelight.h>
 #include <memory>
 
-class N3dsConnectionListener {
+class N3dsConnectionListener : public ISubscriber {
   public:
-    N3dsConnectionListener(bool debug, bool enable_motion);
+    N3dsConnectionListener(bool enable_motion);
     ~N3dsConnectionListener();
 
-    static N3dsConnectionListener *create_instance(bool debug,
-                                                   bool enable_motion) {
+    void accept(IMessage *msg) override;
+
+    static N3dsConnectionListener *create_instance(bool enable_motion) {
         if (instance == nullptr) {
-            instance =
-                std::make_unique<N3dsConnectionListener>(debug, enable_motion);
+            instance = std::make_unique<N3dsConnectionListener>(enable_motion);
         }
         return instance.get();
     }
@@ -40,10 +42,20 @@ class N3dsConnectionListener {
     }
     static void destroy_instance() { instance = nullptr; }
 
-  public:
-    CONNECTION_LISTENER_CALLBACKS n3ds_connection_callbacks;
-    bool connection_closed = false;
+    void connection_terminated(int errorCode);
+    void connection_log_message(const char *format, va_list arglist);
+    void connection_status_update(int status);
+    void set_motion_event_state(unsigned short controllerNumber,
+                                unsigned char motionType,
+                                unsigned short reportRateHz);
+
+    bool is_connection_closed();
 
   private:
     static std::unique_ptr<N3dsConnectionListener> instance;
+    bool enable_motion;
+    AtomicVar<bool> debug = false;
+    AtomicVar<bool> connection_closed = false;
 };
+
+extern CONNECTION_LISTENER_CALLBACKS n3ds_connection_callbacks;

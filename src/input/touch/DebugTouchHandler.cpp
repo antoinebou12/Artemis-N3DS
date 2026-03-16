@@ -17,22 +17,27 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "N3dsTouchscreenInput.hpp"
+#include "TouchHandler.hpp"
 #include <Limelight.h>
+#include <cstdio>
+#include <cstring>
 
-void AbsoluteTouchHandler::_handle_touch_down(touchPosition touch) {
-    LiSendMousePositionEvent(touch.px, touch.py + y_offset,
-                             GSP_SCREEN_HEIGHT_BOTTOM,
-                             y_scale * GSP_SCREEN_WIDTH);
-    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+PrintConsole DebugTouchHandler::topScreen;
+PrintConsole DebugTouchHandler::bottomScreen;
+
+DebugTouchHandler::DebugTouchHandler() {
+    consoleSelect(&bottomScreen);
+    consoleDebugInit(debugDevice_CONSOLE);
+    printf("Debug Logs will now appear on the bottom screen\n");
 }
 
-void AbsoluteTouchHandler::_handle_touch_up(touchPosition touch) {
-    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+DebugTouchHandler::~DebugTouchHandler() {
+    consoleDebugInit(debugDevice_NULL);
+    consoleSelect(&topScreen);
 }
 
-void AbsoluteTouchHandler::_handle_touch_hold(touchPosition touch) {
-    LiSendMousePositionEvent(touch.px, touch.py + y_offset,
-                             GSP_SCREEN_HEIGHT_BOTTOM,
-                             y_scale * GSP_SCREEN_WIDTH);
-}
+void DebugTouchHandler::_handle_touch_down(touchPosition touch) {}
+
+void DebugTouchHandler::_handle_touch_up(touchPosition touch) {}
+
+void DebugTouchHandler::_handle_touch_hold(touchPosition touch) {}

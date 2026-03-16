@@ -17,9 +17,7 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "../util.h"
-#include "n3ds/N3dsRenderer.hpp"
-#include "video.h"
+#include "video.hpp"
 
 #include <3ds.h>
 
@@ -29,27 +27,20 @@
 #include <memory>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdexcept>
 #include <stdio.h>
 #include <stdlib.h>
 
-// General decoder and renderer state
-static void *nal_unit_buffer;
-static size_t nal_unit_buffer_size;
-static MVDSTD_Config mvdstd_config;
+static std::unique_ptr<MvdDecoder> instance = nullptr;
 
-static int image_width, image_height, surface_width, surface_height, pixel_size;
-static u8 *rgb_img_buffer;
-static bool first_frame = true;
-
-static std::unique_ptr<IN3dsRenderer> renderer = nullptr;
-
-static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
-                     void *context, int drFlags) {
+MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
+                       void *context, int drFlags)
+    : VideoDecoderBase(width, height) {
     bool is_new_3ds;
     APT_CheckNew3DS(&is_new_3ds);
     if (!is_new_3ds) {
         fprintf(stderr, "Hardware decoding is only available on the New 3DS\n");
-        return -1;
+        throw std::runtime_error("Unsupported hardware");
     }
 
     // Calculate required buffer size
@@ -67,7 +58,7 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     int status = mvdstdCalculateBufferSize(&config, &size);
     if (status) {
         fprintf(stderr, "mvdstdCalculateBufferSize failed: %d\n", status);
-        return -1;
+        throw std::runtime_error("mvdstdCalculateBufferSize failed");
     }
 
     first_frame = true;
@@ -76,29 +67,23 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     if (status) {
         fprintf(stderr, "mvdstdInit failed: %d\n", status);
         mvdstdExit();
-        return -1;
+        throw std::runtime_error("mvdstdInit failed");
     }
 
-    surface_height = GSP_SCREEN_WIDTH;
-    surface_width = width > GSP_SCREEN_HEIGHT_TOP ? GSP_SCREEN_HEIGHT_TOP_2X
-                                                  : GSP_SCREEN_HEIGHT_TOP;
-    // Clamp output image to max dimensions supported by the renderer
-    image_width = width > MOON_CTR_VIDEO_TEX_W ? MOON_CTR_VIDEO_TEX_W : width;
-    image_height =
-        height > MOON_CTR_VIDEO_TEX_H ? MOON_CTR_VIDEO_TEX_H : height;
-
-    GSPGPU_FramebufferFormat px_fmt = gfxGetScreenFormat(GFX_TOP);
-    pixel_size = gspGetBytesPerPixel(px_fmt);
     rgb_img_buffer = (u8 *)linearAlloc(MOON_CTR_VIDEO_TEX_W *
                                        MOON_CTR_VIDEO_TEX_H * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
-        return -1;
+        throw std::runtime_error("Out of memory");
     }
 
-    ensure_linear_buf_size(&nal_unit_buffer, &nal_unit_buffer_size,
-                           INITIAL_DECODER_BUFFER_SIZE +
-                               AV_INPUT_BUFFER_PADDING_SIZE);
+    status = ensure_linear_buf_size(&nal_unit_buffer, &nal_unit_buffer_size,
+                                    INITIAL_DECODER_BUFFER_SIZE +
+                                        AV_INPUT_BUFFER_PADDING_SIZE);
+    if (status) {
+        fprintf(stderr, "Out of linear memory!\n");
+        throw std::runtime_error("Out of linear memory");
+    }
     mvdstdGenerateDefaultConfig(&mvdstd_config, width, height, image_width,
                                 image_height, NULL, (u32 *)rgb_img_buffer,
                                 NULL);
@@ -108,65 +93,47 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     mvdstd_config.output_width_override = MOON_CTR_VIDEO_TEX_W;
     mvdstd_config.output_height_override = MOON_CTR_VIDEO_TEX_H;
     MVDSTD_SetConfig(&mvdstd_config);
-
-    VideoRendererContext *renderer_context = (VideoRendererContext *)context;
-    switch (renderer_context->type) {
-    case (RENDER_BOTTOM):
-        renderer = std::make_unique<N3dsRendererBottom>(
-            image_width, image_height, pixel_size);
-        break;
-    case (RENDER_DUAL_SCREEN_STRETCH):
-        renderer = std::make_unique<N3dsRendererDualScreenStretch>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    case (RENDER_DUAL_SCREEN_MIRROR):
-        renderer = std::make_unique<N3dsRendererDualScreenMirror>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    case (RENDER_DUAL_SCREEN_MAGNIFY):
-        renderer = std::make_unique<N3dsRendererDualScreenMagnify>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    default:
-        renderer = std::make_unique<N3dsRendererTop>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    }
-    return 0;
 }
 
 // This function must be called after
 // decoding is finished
-static void n3ds_destroy(void) {
+MvdDecoder::~MvdDecoder() {
     y2rExit();
     mvdstdExit();
     linearFree(nal_unit_buffer);
     linearFree(rgb_img_buffer);
-    renderer = nullptr;
+    printf("Video decoder shutdown successfully\n");
 }
 
 // packets must be decoded in order
 // indata must be inlen + AV_INPUT_BUFFER_PADDING_SIZE in length
-static inline int n3ds_decode(unsigned char *indata, int inlen) {
+DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
     int ret = mvdstdProcessVideoFrame(indata, inlen, 1, NULL);
-    if (ret != MVD_STATUS_PARAMSET && ret != MVD_STATUS_INCOMPLETEPROCESSING) {
-        mvdstdRenderVideoFrame(&mvdstd_config, true);
+    if (!MVD_CHECKNALUPROC_SUCCESS(ret)) {
+        return DecodeReturnStatus::ERROR;
     }
-    return 0;
+
+    if (ret != MVD_STATUS_PARAMSET && ret != MVD_STATUS_INCOMPLETEPROCESSING) {
+        return DecodeReturnStatus::NO_FRAME_PRODUCED;
+    }
+    ret = mvdstdRenderVideoFrame(&mvdstd_config, true);
+    if (ret != MVD_STATUS_OK) {
+        return DecodeReturnStatus::ERROR;
+    }
+    return DecodeReturnStatus::SUCCESS;
 }
 
-static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
+int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     u64 start_ticks = svcGetSystemTick();
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
 
-    ensure_linear_buf_size(&nal_unit_buffer, &nal_unit_buffer_size,
-                           decodeUnit->fullLength +
-                               AV_INPUT_BUFFER_PADDING_SIZE);
+    if (ensure_linear_buf_size(&nal_unit_buffer, &nal_unit_buffer_size,
+                               decodeUnit->fullLength +
+                                   AV_INPUT_BUFFER_PADDING_SIZE)) {
+        printf("Out of linear memory!\n");
+        return DR_OK;
+    }
 
     while (entry != NULL) {
         memcpy(nal_unit_buffer + length, entry->data, entry->length);
@@ -175,10 +142,12 @@ static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
     }
     GSPGPU_FlushDataCache(nal_unit_buffer, length);
 
-    n3ds_decode((unsigned char *)nal_unit_buffer, length);
-    renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
+    _decode((unsigned char *)nal_unit_buffer, length);
 
+    renderer_lock.lock();
+    renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
     renderer->write_px_to_framebuffer(rgb_img_buffer);
+    renderer_lock.unlock();
 
     // If MVD never gets an IDR frame, everything shows up gray
     if (first_frame) {
@@ -186,6 +155,28 @@ static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
         return DR_NEED_IDR;
     }
     return DR_OK;
+}
+
+static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
+                     void *context, int drFlags) {
+    try {
+        instance = std::make_unique<MvdDecoder>(videoFormat, width, height,
+                                                redrawRate, context, drFlags);
+        return 0;
+    } catch (const std::exception &e) {
+        fprintf(stderr, "Failed to initialize N3DS MVD decoder: %s\n",
+                e.what());
+        return -1;
+    }
+}
+
+static void n3ds_destroy() { instance = nullptr; }
+
+static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
+    if (instance == nullptr) {
+        return DR_OK;
+    }
+    return instance->submit_decode_unit(decodeUnit);
 }
 
 DECODER_RENDERER_CALLBACKS decoder_callbacks_n3ds_mvd = {

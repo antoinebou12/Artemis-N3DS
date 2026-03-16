@@ -19,31 +19,29 @@
 
 #include "N3dsRenderer.hpp"
 
-#include <3ds.h>
 #include <cstdlib>
 #include <cstring>
 #include <stdbool.h>
 #include <stdexcept>
 #include <unistd.h>
 
-N3dsRendererTop::N3dsRendererTop(int dest_width, int dest_height, int src_width,
-                                 int src_height, int px_size, bool debug_in)
-    : N3dsRendererBase(GFX_TOP, dest_width, dest_height, src_width, src_height,
-                       px_size, debug_in) {}
+N3dsRendererDualScreenStretch::N3dsRendererDualScreenStretch(
+    int dest_width, int dest_height, int src_width, int src_height, int px_size)
+    : top_renderer(dest_width, dest_height, src_width, src_height / 2, px_size),
+      bottom_renderer(src_width, src_height / 2, px_size) {
 
-N3dsRendererTop::~N3dsRendererTop() = default;
-
-void N3dsRendererTop::write_px_to_framebuffer(uint8_t *source) {
-    // TODO: Add logic for stretching 400px images to fit 2 400px screen buffers
-    if (osGet3DSliderState() > 0.0 &&
-        surface_width >= GSP_SCREEN_HEIGHT_TOP_2X) {
-        ensure_3d_enabled();
-    } else {
-        ensure_3d_disabled();
-    }
-    write_px_to_framebuffer_gpu(source);
+    int px_offset_y = src_height / 2;
+    int line_stride = MOON_CTR_VIDEO_TEX_W * px_size;
+    source_offset = px_offset_y * line_stride;
 }
 
-void N3dsRendererTop::set_perf_decode_ticks(u64 ticks) {
-    perf_decode_ticks = ticks;
+N3dsRendererDualScreenStretch::~N3dsRendererDualScreenStretch() = default;
+
+void N3dsRendererDualScreenStretch::write_px_to_framebuffer(uint8_t *source) {
+    top_renderer.write_px_to_framebuffer(source);
+    bottom_renderer.write_px_to_framebuffer(source + source_offset);
+}
+
+void N3dsRendererDualScreenStretch::set_perf_decode_ticks(u64 ticks) {
+    top_renderer.set_perf_decode_ticks(ticks);
 }

@@ -18,20 +18,11 @@
  */
 #pragma once
 
-#include "../../video/n3ds/N3dsRenderer.hpp"
+#include "../../system/message.hpp"
 #include "keycode_map.hpp"
 #include <3ds.h>
 #include <memory>
 
-enum N3dsTouchType {
-    DISABLED,
-    GAMEPAD,
-    MOUSEPAD,
-    KEYBOARD,
-    ABSOLUTE_TOUCH,
-    DS_TOUCH,
-    MAGNIFY_TOUCH,
-};
 typedef struct _GAMEPAD_STATE {
     unsigned char leftTrigger, rightTrigger;
     short leftStickX, leftStickY;
@@ -43,6 +34,7 @@ typedef struct _GAMEPAD_STATE {
 
 class TouchHandlerBase {
   public:
+    virtual ~TouchHandlerBase() = default;
     void handle_touch_down(touchPosition touch);
     void handle_touch_up(touchPosition touch);
     void handle_touch_hold(touchPosition touch);
@@ -56,14 +48,44 @@ class TouchHandlerBase {
     bool isActive = false;
 };
 
+class DebugTouchHandler : public TouchHandlerBase {
+  public:
+    DebugTouchHandler();
+    ~DebugTouchHandler();
+
+  private:
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
+
+  public:
+    static PrintConsole topScreen;
+    static PrintConsole bottomScreen;
+};
+
+class MenuTouchHandler : public TouchHandlerBase {
+  public:
+    MenuTouchHandler();
+    ~MenuTouchHandler();
+
+  private:
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
+
+  private:
+    std::shared_ptr<IMessage> message = nullptr;
+};
+
 class GamepadTouchHandler : public TouchHandlerBase {
   public:
     GamepadTouchHandler(GAMEPAD_STATE *gamepad_in);
+    ~GamepadTouchHandler() = default;
 
   private:
-    void _handle_touch_down(touchPosition touch);
-    void _handle_touch_up(touchPosition touch);
-    void _handle_touch_hold(touchPosition touch);
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
 
   private:
     GAMEPAD_STATE *gamepad_state;
@@ -72,11 +94,12 @@ class GamepadTouchHandler : public TouchHandlerBase {
 class MouseTouchHandler : public TouchHandlerBase {
   public:
     MouseTouchHandler();
+    ~MouseTouchHandler() = default;
 
   private:
-    void _handle_touch_down(touchPosition touch);
-    void _handle_touch_up(touchPosition touch);
-    void _handle_touch_hold(touchPosition touch);
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
 
   private:
     int mouse_button = -1;
@@ -98,11 +121,12 @@ struct KeyInfo {
 class KeyboardTouchHandler : public TouchHandlerBase {
   public:
     KeyboardTouchHandler();
+    ~KeyboardTouchHandler() = default;
 
   private:
-    void _handle_touch_down(touchPosition touch);
-    void _handle_touch_up(touchPosition touch);
-    void _handle_touch_hold(touchPosition touch);
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
 
     keycode_info get_keycode(touchPosition touch);
     void set_screen(const uint8_t *bgr_buffer, int bgr_size);
@@ -124,49 +148,45 @@ class KeyboardTouchHandler : public TouchHandlerBase {
     std::map<int, keycode_info> *selected_keycodes = nullptr;
 };
 
-class AbsoluteTouchHandler : public TouchHandlerBase {
+class MirrorTouchHandler : public TouchHandlerBase {
   public:
-    AbsoluteTouchHandler(int y_offset_in, int y_scale_in)
-        : y_offset(y_offset_in), y_scale(y_scale_in){};
+    MirrorTouchHandler();
+    ~MirrorTouchHandler() = default;
 
   private:
-    void _handle_touch_down(touchPosition touch);
-    void _handle_touch_up(touchPosition touch);
-    void _handle_touch_hold(touchPosition touch);
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
+};
+
+class StretchTouchHandler : public TouchHandlerBase {
+  public:
+    StretchTouchHandler();
+    ~StretchTouchHandler() = default;
 
   private:
-    int y_offset = 0;
-    int y_scale = 1;
-    int previous_x = 0;
-    int previous_y = 0;
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
 };
 
 class MagnifyTouchHandler : public TouchHandlerBase {
   public:
-    MagnifyTouchHandler() = default;
+    MagnifyTouchHandler(GAMEPAD_STATE *gamepad_state, int image_width,
+                        int image_height);
+    ~MagnifyTouchHandler() = default;
 
   private:
-    void _handle_touch_down(touchPosition touch);
-    void _handle_touch_up(touchPosition touch);
-    void _handle_touch_hold(touchPosition touch);
-};
-
-class N3dsTouchscreenInput {
-  public:
-    N3dsTouchscreenInput(GAMEPAD_STATE *gamepad_in,
-                         N3dsTouchType touch_type_in);
-    ~N3dsTouchscreenInput() = default;
-
-    void n3dsinput_handle_touch(u32 kDown, u32 kUp);
-
-  private:
-    inline void init_touch_handler();
-    inline void n3dsinput_set_touch(enum N3dsTouchType ttype);
-    inline bool next_touchpad_pressed(touchPosition touch);
-    inline bool previous_touchpad_pressed(touchPosition touch);
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
+    void _set_touch_offsets(int center_x, int center_y);
+    bool _lock_view();
 
   private:
     GAMEPAD_STATE *gamepad_state;
-    N3dsTouchType touch_type;
-    std::unique_ptr<TouchHandlerBase> handler = nullptr;
+    int image_width;
+    int image_height;
+    int x_touch_offset = 0;
+    int y_touch_offset = 0;
 };

@@ -16,21 +16,22 @@
  * You should have received a copy of the GNU General Public License
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "TouchHandler.hpp"
+#include <Limelight.h>
 
-#include "../../system/dispatcher.hpp"
-#include "N3dsTouchscreenInput.hpp"
-#include <3ds.h>
+MirrorTouchHandler::MirrorTouchHandler() {}
 
-void MagnifyTouchHandler::_handle_touch_down(touchPosition touch) {
-    auto pDispatcher = MessageDispatcher::get_instance();
-    auto msg = TouchscreenEventMsg(TouchscreenEventMsgType::DOWN, touch);
-    pDispatcher->post_immediate(&msg);
+void MirrorTouchHandler::_handle_touch_down(touchPosition touch) {
+    LiSendMousePositionEvent(touch.px, touch.py, GSP_SCREEN_HEIGHT_BOTTOM,
+                             GSP_SCREEN_WIDTH);
+    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
 }
 
-void MagnifyTouchHandler::_handle_touch_up(touchPosition touch) {}
+void MirrorTouchHandler::_handle_touch_up(touchPosition touch) {
+    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+}
 
-void MagnifyTouchHandler::_handle_touch_hold(touchPosition touch) {
-    auto pDispatcher = MessageDispatcher::get_instance();
-    auto msg = TouchscreenEventMsg(TouchscreenEventMsgType::HOLD, touch);
-    pDispatcher->post_immediate(&msg);
+void MirrorTouchHandler::_handle_touch_hold(touchPosition touch) {
+    LiSendMousePositionEvent(touch.px, touch.py, GSP_SCREEN_HEIGHT_BOTTOM,
+                             GSP_SCREEN_WIDTH);
 }

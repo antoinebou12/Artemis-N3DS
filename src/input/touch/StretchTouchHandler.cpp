@@ -16,39 +16,22 @@
  * You should have received a copy of the GNU General Public License
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
-
-#pragma once
-
+#include "TouchHandler.hpp"
 #include <Limelight.h>
 
-#include <stdbool.h>
+StretchTouchHandler::StretchTouchHandler() {}
 
-#define DISPLAY_FULLSCREEN 1
-#define ENABLE_HARDWARE_ACCELERATION_1 2
-#define ENABLE_HARDWARE_ACCELERATION_2 4
-#define DISPLAY_ROTATE_MASK 24
-#define DISPLAY_ROTATE_90 8
-#define DISPLAY_ROTATE_180 16
-#define DISPLAY_ROTATE_270 24
+void StretchTouchHandler::_handle_touch_down(touchPosition touch) {
+    LiSendMousePositionEvent(touch.px, touch.py + GSP_SCREEN_WIDTH,
+                             GSP_SCREEN_HEIGHT_BOTTOM, 2 * GSP_SCREEN_WIDTH);
+    LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+}
 
-#define INIT_EGL 1
-#define INIT_VDPAU 2
-#define INIT_VAAPI 3
+void StretchTouchHandler::_handle_touch_up(touchPosition touch) {
+    LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+}
 
-#define INITIAL_DECODER_BUFFER_SIZE (256 * 1024)
-
-#include <3ds/types.h>
-
-enum N3dsRenderType {
-    RENDER_DEFAULT,
-    RENDER_BOTTOM,
-    RENDER_DUAL_SCREEN_STRETCH,
-    RENDER_DUAL_SCREEN_MIRROR,
-    RENDER_DUAL_SCREEN_MAGNIFY
-};
-
-struct VideoRendererContext {
-    N3dsRenderType type;
-};
-extern DECODER_RENDERER_CALLBACKS decoder_callbacks_n3ds;
-extern DECODER_RENDERER_CALLBACKS decoder_callbacks_n3ds_mvd;
+void StretchTouchHandler::_handle_touch_hold(touchPosition touch) {
+    LiSendMousePositionEvent(touch.px, touch.py + GSP_SCREEN_WIDTH,
+                             GSP_SCREEN_HEIGHT_BOTTOM, 2 * GSP_SCREEN_WIDTH);
+}

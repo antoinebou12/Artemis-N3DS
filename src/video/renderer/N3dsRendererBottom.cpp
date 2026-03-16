@@ -25,21 +25,24 @@
 #include <stdexcept>
 #include <unistd.h>
 
-N3dsRendererDualScreenStretch::N3dsRendererDualScreenStretch(
-    int dest_width, int dest_height, int src_width, int src_height, int px_size)
-    : source_offset(MOON_CTR_VIDEO_TEX_W *
-                    (MOON_CTR_VIDEO_TEX_H - MOON_CTR_VIDEO_TEX_H_OFFSET) *
-                    px_size / 2),
-      top_renderer(dest_width, dest_height, src_width, src_height / 2, px_size),
-      bottom_renderer(src_width, src_height / 2, px_size) {}
+N3dsRendererBottom::N3dsRendererBottom(int src_width, int src_height,
+                                       int px_size, bool debug_in)
+    : N3dsRendererBase(GFX_BOTTOM, GSP_SCREEN_HEIGHT_BOTTOM, GSP_SCREEN_WIDTH,
+                       src_width, src_height, px_size, debug_in) {}
 
-N3dsRendererDualScreenStretch::~N3dsRendererDualScreenStretch() = default;
-
-void N3dsRendererDualScreenStretch::write_px_to_framebuffer(uint8_t *source) {
-    top_renderer.write_px_to_framebuffer(source);
-    bottom_renderer.write_px_to_framebuffer(source + source_offset);
+void N3dsRendererBottom::write_px_to_framebuffer(uint8_t *source) {
+    write_px_to_framebuffer_gpu(source);
 }
 
-void N3dsRendererDualScreenStretch::set_perf_decode_ticks(u64 ticks) {
-    top_renderer.set_perf_decode_ticks(ticks);
+void N3dsRendererBottom::write_px_to_framebuffer_raw(const uint8_t *source,
+                                                     int offset, int size) {
+    u8 *gfxbtmadr = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
+
+    if (size == 0) {
+        size = surface_width * surface_height * px_size;
+    }
+    memcpy(gfxbtmadr + offset, source, size);
+
+    gfxFlushBuffers();
+    gfxScreenSwapBuffers(GFX_BOTTOM, false);
 }

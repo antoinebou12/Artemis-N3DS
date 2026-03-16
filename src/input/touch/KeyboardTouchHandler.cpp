@@ -17,7 +17,8 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "N3dsTouchscreenInput.hpp"
+#include "../../system/dispatcher.hpp"
+#include "TouchHandler.hpp"
 #include "keyboard_alt_bgr.h"
 #include "keyboard_bgr.h"
 #include "keyboard_lock_bgr.h"
@@ -36,17 +37,12 @@ KeyboardTouchHandler::KeyboardTouchHandler()
 }
 
 void KeyboardTouchHandler::set_screen(const uint8_t *bgr_buffer, int bgr_size) {
-    u8 *gfxbtmadr = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
-
-    memcpy(gfxbtmadr, bgr_buffer, bgr_size);
-
-    gfxFlushBuffers();
-    gfxScreenSwapBuffers(GFX_BOTTOM, false);
+    auto message =
+        std::make_shared<KeyboardStateChangedMsg>(bgr_buffer, 0, bgr_size);
+    MessageDispatcher::get_instance()->post_immediate(message);
 }
 
 void KeyboardTouchHandler::set_screen_key(KeyInfo &key_info) {
-    u8 *gfxbtmadr = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, NULL, NULL);
-
     const uint8_t *bgr_buffer;
     switch (key_info.state) {
     case (KEY_TEMPORARY):
@@ -68,11 +64,11 @@ void KeyboardTouchHandler::set_screen_key(KeyInfo &key_info) {
             ((GSP_SCREEN_WIDTH * x) + (GSP_SCREEN_WIDTH - key_info.max_y)) *
             key_px_size;
         int bgr_size = (key_info.max_y - key_info.min_y) * key_px_size;
-        memcpy(gfxbtmadr + bgr_offset, bgr_buffer + bgr_offset, bgr_size);
-    }
 
-    gfxFlushBuffers();
-    gfxScreenSwapBuffers(GFX_BOTTOM, false);
+        auto message = std::make_shared<KeyboardStateChangedMsg>(
+            bgr_buffer + bgr_offset, bgr_offset, bgr_size);
+        MessageDispatcher::get_instance()->post_immediate(message);
+    }
 }
 
 void KeyboardTouchHandler::set_shift_keys() {

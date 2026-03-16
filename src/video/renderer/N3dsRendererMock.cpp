@@ -1,7 +1,7 @@
 /*
  * This file is part of Moonlight Embedded.
  *
- * Copyright (C) 2017 Iwan Timmer
+ * Copyright (C) 2015 Iwan Timmer
  *
  * Moonlight is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,21 +17,18 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "N3dsRenderer.hpp"
 
+#include <cstdlib>
+#include <cstring>
 #include <stdbool.h>
-#include <stddef.h>
+#include <stdexcept>
+#include <unistd.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+N3dsRendererMock::N3dsRendererMock() {}
 
-int write_bool(char *path, bool val);
-int read_file(char *path, char *output, int output_len);
-bool ensure_buf_size(void **buf, size_t *buf_size, size_t required_size);
-bool has_fast_aes(void);
-int ensure_linear_buf_size(void **buf, size_t *buf_size, size_t required_size);
+N3dsRendererMock::~N3dsRendererMock() = default;
 
-#ifdef __cplusplus
-}
-#endif
+void N3dsRendererMock::write_px_to_framebuffer(uint8_t *source) {}
+
+void N3dsRendererMock::set_perf_decode_ticks(u64 ticks) {}

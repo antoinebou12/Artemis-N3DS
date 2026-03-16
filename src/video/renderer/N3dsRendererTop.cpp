@@ -19,23 +19,29 @@
 
 #include "N3dsRenderer.hpp"
 
+#include <3ds.h>
 #include <cstdlib>
 #include <cstring>
 #include <stdbool.h>
 #include <stdexcept>
 #include <unistd.h>
 
-N3dsRendererBottom::N3dsRendererBottom(int src_width, int src_height,
-                                       int px_size, bool debug_in)
-    : N3dsRendererBase(GFX_BOTTOM, GSP_SCREEN_HEIGHT_BOTTOM, GSP_SCREEN_WIDTH,
-                       src_width, src_height, px_size, debug_in) {}
+N3dsRendererTop::N3dsRendererTop(int dest_width, int dest_height, int src_width,
+                                 int src_height, int px_size, bool debug_in)
+    : N3dsRendererBase(GFX_TOP, dest_width, dest_height, src_width, src_height,
+                       px_size, debug_in) {}
 
-N3dsRendererBottom::~N3dsRendererBottom() {}
-
-void N3dsRendererBottom::write_px_to_framebuffer(uint8_t *source) {
+void N3dsRendererTop::write_px_to_framebuffer(uint8_t *source) {
+    // TODO: Add logic for stretching 400px images to fit 2 400px screen buffers
+    if (osGet3DSliderState() > 0.0 &&
+        surface_width >= GSP_SCREEN_HEIGHT_TOP_2X) {
+        ensure_3d_enabled();
+    } else {
+        ensure_3d_disabled();
+    }
     write_px_to_framebuffer_gpu(source);
 }
 
-void N3dsRendererBottom::set_perf_decode_ticks(u64 ticks) {
+void N3dsRendererTop::set_perf_decode_ticks(u64 ticks) {
     perf_decode_ticks = ticks;
 }

@@ -19,6 +19,7 @@
 
 #include "n3ds_input.hpp"
 #include "../system/dispatcher.hpp"
+#include "touch/TouchHandler.hpp"
 
 #include <3ds.h>
 #include <Limelight.h>
@@ -27,7 +28,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define QUIT_BUTTONS (PLAY_FLAG | BACK_FLAG | LB_FLAG | RB_FLAG)
 #define TOUCH_GAMEPAD_BUTTONS (SPECIAL_FLAG | LS_CLK_FLAG | RS_CLK_FLAG)
 #define TOUCH_MOUSEPAD_BUTTONS (BUTTON_LEFT | BUTTON_RIGHT)
 #define SUPPORTED_BUTTONS                                                      \
@@ -42,7 +42,7 @@
 #define CONTROLLER_NUMBER 0
 #define ACTIVE_GAMEPAD_MASK 1
 
-N3dsInput::N3dsInput(N3dsTouchType touch_type, bool swap_face_buttons,
+N3dsInput::N3dsInput(int image_width, int image_height, bool swap_face_buttons,
                      bool swap_triggers_and_shoulders,
                      bool use_triggers_for_mouse_in) {
     hidInit();
@@ -62,8 +62,9 @@ N3dsInput::N3dsInput(N3dsTouchType touch_type, bool swap_face_buttons,
     CUSTOM_KEY_ZL = swap_triggers_and_shoulders ? KEY_L : KEY_ZL;
     CUSTOM_KEY_ZR = swap_triggers_and_shoulders ? KEY_R : KEY_ZR;
 
-    touch_handler =
-        std::make_unique<N3dsTouchscreenInput>(&gamepad_state, touch_type);
+    aptSetHomeAllowed(false);
+    touch_handler = std::make_unique<N3dsTouchscreenInput>(
+        &gamepad_state, image_width, image_height);
 
     auto pDispatcher = MessageDispatcher::get_instance();
     pDispatcher->subscribe(MessageType::ENABLE_ACCEL, this);
@@ -79,13 +80,15 @@ N3dsInput::~N3dsInput() {
     gamepad_state = GAMEPAD_STATE();
     previous_state = GAMEPAD_STATE();
     touch_handler = nullptr;
+    aptSetHomeAllowed(true);
+    printf("Input handler shutdown successfully\n");
 }
 
 void N3dsInput::accept(IMessage *msg) {
     if (msg->getMessageType() == MessageType::ENABLE_ACCEL) {
-        enable_accel = true;
+        enable_accel.store(true);
     } else if (msg->getMessageType() == MessageType::ENABLE_GYRO) {
-        enable_gyro = true;
+        enable_gyro.store(true);
     }
 }
 
@@ -166,7 +169,13 @@ bool N3dsInput::_gyroscope_state_changed() {
            (previous_state.gyro_rate_z != gamepad_state.gyro_rate_z);
 }
 
-int N3dsInput::n3dsinput_handle_event() {
+void N3dsInput::force_touchscreen_menu() {
+    auto message =
+        std::make_shared<TouchStateChangedMsg>(N3dsTouchType::MENU_TOUCH);
+    MessageDispatcher::get_instance()->post(message);
+}
+
+void N3dsInput::n3dsinput_handle_event() {
     hidScanInput();
     u32 kDown = hidKeysDown();
     u32 kUp = hidKeysUp();
@@ -185,8 +194,16 @@ int N3dsInput::n3dsinput_handle_event() {
         gamepad_state.rightTrigger &= ~n3ds_to_li_trigger(kUp, CUSTOM_KEY_ZR);
     }
 
-    if ((gamepad_state.buttons & QUIT_BUTTONS) == QUIT_BUTTONS)
-        return 1;
+    // Use the HOME button to open the menu
+    if (aptCheckHomePressRejected()) {
+        if (!menu_active) {
+            force_touchscreen_menu();
+            menu_active = true;
+        }
+        return;
+    } else {
+        menu_active = false;
+    }
 
     circlePosition cpad_pos;
     hidCircleRead(&cpad_pos);
@@ -227,7 +244,7 @@ int N3dsInput::n3dsinput_handle_event() {
         }
     }
 
-    if (enable_accel) {
+    if (enable_accel.load()) {
         accelVector accel_vector;
         hidAccelRead(&accel_vector);
         gamepad_state.accel_vector_x = trunc(accel_vector.x / accel_coeff);
@@ -241,7 +258,7 @@ int N3dsInput::n3dsinput_handle_event() {
         }
     }
 
-    if (enable_gyro) {
+    if (enable_gyro.load()) {
         angularRate gyro_rate;
         hidGyroRead(&gyro_rate);
         gamepad_state.gyro_rate_x = trunc(-1 * gyro_rate.x / gyro_coeff);
@@ -255,5 +272,5 @@ int N3dsInput::n3dsinput_handle_event() {
         }
     }
 
-    return 0;
+    return;
 }

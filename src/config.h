@@ -31,7 +31,6 @@ extern "C" {
 
 typedef struct _CONFIGURATION {
     STREAM_CONFIGURATION stream;
-    int debug_level;
     char *app;
     char *action;
     char *address;
@@ -52,7 +51,6 @@ typedef struct _CONFIGURATION {
     int pin;
     unsigned short port;
     bool hwdecode;
-    int display_type;
     bool motion_controls;
     bool swap_face_buttons;
     bool swap_triggers_and_shoulders;

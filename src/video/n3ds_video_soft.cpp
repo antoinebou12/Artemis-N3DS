@@ -18,32 +18,28 @@
  */
 
 #include "ffmpeg.h"
-#include "n3ds/N3dsRenderer.hpp"
-#include "video.h"
+#include "video.hpp"
 
 #include "../util.h"
 
 #include <3ds.h>
 #include <memory>
 #include <stdbool.h>
+#include <stdexcept>
 #include <unistd.h>
 
 #define SLICES_PER_FRAME 1
 #define N3DS_BUFFER_FRAMES 1
 
-static void *ffmpeg_buffer;
-static size_t ffmpeg_buffer_size;
-static int image_width, image_height, surface_width, surface_height, pixel_size;
-static u8 *rgb_img_buffer;
+static std::unique_ptr<SoftVideoDecoder> instance = nullptr;
 
-static std::unique_ptr<IN3dsRenderer> renderer = nullptr;
-
-static int n3ds_setup(int videoFormat, int width, int height, int redrawRate,
-                      void *context, int drFlags) {
+SoftVideoDecoder::SoftVideoDecoder(int videoFormat, int width, int height,
+                                   int redrawRate, void *context, int drFlags)
+    : VideoDecoderBase(width, height) {
     if (ffmpeg_init(videoFormat, width, height, 0, N3DS_BUFFER_FRAMES,
                     SLICES_PER_FRAME) < 0) {
         fprintf(stderr, "Couldn't initialize video decoding\n");
-        return -1;
+        throw std::runtime_error("Couldn't initialize video decoding\n");
     }
 
     ensure_buf_size(&ffmpeg_buffer, &ffmpeg_buffer_size,
@@ -51,7 +47,7 @@ static int n3ds_setup(int videoFormat, int width, int height, int redrawRate,
 
     if (y2rInit()) {
         fprintf(stderr, "Failed to initialize Y2R\n");
-        return -1;
+        throw std::runtime_error("Failed to initialize Y2R\n");
     }
     Y2RU_ConversionParams y2r_parameters;
     y2r_parameters.input_format = INPUT_YUV420_INDIV_8;
@@ -65,68 +61,29 @@ static int n3ds_setup(int videoFormat, int width, int height, int redrawRate,
     int status = Y2RU_SetConversionParams(&y2r_parameters);
     if (status) {
         fprintf(stderr, "Failed to set Y2RU params\n");
-        return -1;
+        throw std::runtime_error("Failed to set Y2RU params\n");
     }
 
-    surface_height = GSP_SCREEN_WIDTH;
-    if (width > GSP_SCREEN_HEIGHT_TOP) {
-        surface_width = GSP_SCREEN_HEIGHT_TOP_2X;
-    } else {
-        surface_width = GSP_SCREEN_HEIGHT_TOP;
-    }
-
-    GSPGPU_FramebufferFormat px_fmt = gfxGetScreenFormat(GFX_TOP);
-    image_width = width;
-    image_height = height;
-    pixel_size = gspGetBytesPerPixel(px_fmt);
     rgb_img_buffer = (u8 *)linearAlloc(MOON_CTR_VIDEO_TEX_W *
                                        MOON_CTR_VIDEO_TEX_H * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
-        return -1;
+        throw std::runtime_error("Out of memory!\n");
     }
-
-    VideoRendererContext *renderer_context = (VideoRendererContext *)context;
-    switch (renderer_context->type) {
-    case (RENDER_BOTTOM):
-        renderer = std::make_unique<N3dsRendererBottom>(
-            image_width, image_height, pixel_size);
-        break;
-    case (RENDER_DUAL_SCREEN_STRETCH):
-        renderer = std::make_unique<N3dsRendererDualScreenStretch>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    case (RENDER_DUAL_SCREEN_MIRROR):
-        renderer = std::make_unique<N3dsRendererDualScreenMirror>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    case (RENDER_DUAL_SCREEN_MAGNIFY):
-        renderer = std::make_unique<N3dsRendererDualScreenMagnify>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    default:
-        renderer = std::make_unique<N3dsRendererTop>(
-            surface_width, surface_height, image_width, image_height,
-            pixel_size);
-        break;
-    }
-    return 0;
 }
 
-static void n3ds_cleanup() {
+SoftVideoDecoder::~SoftVideoDecoder() {
     ffmpeg_destroy();
     y2rExit();
     linearFree(rgb_img_buffer);
-    renderer = nullptr;
 }
 
-static inline int write_yuv_to_framebuffer(const u8 **source, int width,
-                                           int height, int px_size) {
+inline int SoftVideoDecoder::_write_yuv_to_framebuffer(const u8 **source,
+                                                       int width, int height,
+                                                       int px_size) {
     Handle conversion_finish_event_handle;
     int status = 0;
+    u64 start_ticks = svcGetSystemTick();
 
     status = Y2RU_SetSendingY(source[0], width * height, width, 0);
     if (status) {
@@ -169,14 +126,19 @@ static inline int write_yuv_to_framebuffer(const u8 **source, int width,
     svcWaitSynchronization(conversion_finish_event_handle,
                            10000000); // Wait up to 10ms.
     svcCloseHandle(conversion_finish_event_handle);
+
+    renderer_lock.lock();
+    renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
     renderer->write_px_to_framebuffer(rgb_img_buffer);
+    renderer_lock.unlock();
+
     return DR_OK;
 
 y2ru_failed:
     return -1;
 }
 
-static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
+int SoftVideoDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
 
@@ -191,16 +153,38 @@ static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
     ffmpeg_decode((unsigned char *)ffmpeg_buffer, length);
 
     AVFrame *frame = ffmpeg_get_frame(false);
-    int status = write_yuv_to_framebuffer((const u8 **)frame->data, image_width,
-                                          image_height, pixel_size);
+    int status = _write_yuv_to_framebuffer(
+        (const u8 **)frame->data, image_width, image_height, pixel_size);
 
     return status;
 }
 
+static int soft_video_setup(int videoFormat, int width, int height,
+                            int redrawRate, void *context, int drFlags) {
+    try {
+        instance = std::make_unique<SoftVideoDecoder>(
+            videoFormat, width, height, redrawRate, context, drFlags);
+        return 0;
+    } catch (const std::exception &e) {
+        fprintf(stderr, "Failed to initialize N3DS soft decoder: %s\n",
+                e.what());
+        return -1;
+    }
+}
+
+static void soft_video_cleanup() { instance = nullptr; }
+
+static int soft_video_submit_decode_unit(PDECODE_UNIT decodeUnit) {
+    if (instance == nullptr) {
+        return DR_OK;
+    }
+    return instance->submit_decode_unit(decodeUnit);
+}
+
 DECODER_RENDERER_CALLBACKS decoder_callbacks_n3ds = {
-    .setup = n3ds_setup,
-    .cleanup = n3ds_cleanup,
-    .submitDecodeUnit = n3ds_submit_decode_unit,
+    .setup = soft_video_setup,
+    .cleanup = soft_video_cleanup,
+    .submitDecodeUnit = soft_video_submit_decode_unit,
     .capabilities =
         CAPABILITY_DIRECT_SUBMIT | CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC,
 };
