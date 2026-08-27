@@ -2,6 +2,10 @@
 
 #include <algorithm>
 
+namespace {
+StreamTelemetry g_stream_telemetry;
+}
+
 void StreamTelemetry::reset() {
     samples_.fill({});
     next_index_ = 0;
@@ -41,9 +45,20 @@ StreamTelemetrySummary StreamTelemetry::summary() const {
     return result;
 }
 
+std::size_t StreamTelemetry::copy_samples(StreamTelemetrySample *destination,
+                                          std::size_t capacity) const {
+    if (destination == nullptr || capacity == 0 || count_ == 0) {
+        return 0;
+    }
+
+    const std::size_t copied = std::min(count_, capacity);
+    const std::size_t first = count_ == kCapacity ? next_index_ : 0;
+    for (std::size_t i = 0; i < copied; ++i) {
+        destination[i] = samples_[(first + i) % kCapacity];
+    }
+    return copied;
+}
+
 std::size_t StreamTelemetry::size() const { return count_; }
 
-StreamTelemetry &global_stream_telemetry() {
-    static StreamTelemetry telemetry;
-    return telemetry;
-}
+StreamTelemetry &global_stream_telemetry() { return g_stream_telemetry; }
