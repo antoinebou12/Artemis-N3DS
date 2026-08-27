@@ -78,8 +78,10 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
         throw std::runtime_error("mvdstdInit failed");
     }
 
-    rgb_img_buffer = (u8 *)linearAlloc(MOON_CTR_VIDEO_TEX_W *
-                                       MOON_CTR_VIDEO_TEX_H * pixel_size);
+    const int texture_width = moon_video_texture_width(image_width);
+    const int texture_height = moon_video_texture_height(image_height);
+    rgb_img_buffer =
+        (u8 *)linearAlloc(texture_width * texture_height * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
         throw std::runtime_error("Out of memory");
@@ -96,14 +98,15 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
                                 image_height, NULL, (u32 *)rgb_img_buffer,
                                 NULL);
 
+    // Keep MVD output stride exactly aligned with the renderer's power-of-two
+    // texture. 400x240 therefore uses 512x256 instead of 1024x512.
     mvdstd_config.flag_x104 = 1;
-    mvdstd_config.output_width_override = MOON_CTR_VIDEO_TEX_W;
-    mvdstd_config.output_height_override = MOON_CTR_VIDEO_TEX_H;
+    mvdstd_config.output_width_override = texture_width;
+    mvdstd_config.output_height_override = texture_height;
     MVDSTD_SetConfig(&mvdstd_config);
 }
 
 MvdDecoder::~MvdDecoder() {
-    y2rExit();
     mvdstdExit();
     linearFree(nal_unit_buffer);
     linearFree(rgb_img_buffer);
@@ -145,8 +148,20 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     }
     GSPGPU_FlushDataCache(nal_unit_buffer, length);
 
-    _decode((unsigned char *)nal_unit_buffer, length);
+    const DecodeReturnStatus decode_status =
+        _decode((unsigned char *)nal_unit_buffer, length);
     const u64 decode_end_ticks = svcGetSystemTick();
+
+    // Do not push the same RGB buffer through PICA when MVD only consumed
+    // parameter/incomplete data and produced no new frame.
+    if (decode_status == DecodeReturnStatus::NO_FRAME_PRODUCED) {
+        return DR_OK;
+    }
+    if (decode_status == DecodeReturnStatus::ERROR) {
+        // Recover quickly from corrupted/missing references instead of
+        // presenting stale video indefinitely.
+        return DR_NEED_IDR;
+    }
 
     renderer_lock.lock();
     renderer->set_perf_decode_ticks(decode_end_ticks - decode_start_ticks);
@@ -167,6 +182,8 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     push_global_stream_telemetry(sample);
     last_present_ticks = present_ticks;
 
+    // Ask for an IDR immediately after the first presented frame to avoid the
+    // MVD gray-output failure mode when joining mid-GOP.
     if (first_frame) {
         first_frame = false;
         return DR_NEED_IDR;
