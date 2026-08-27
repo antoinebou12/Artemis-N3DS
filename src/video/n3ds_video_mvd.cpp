@@ -114,26 +114,55 @@ MvdDecoder::~MvdDecoder() {
 }
 
 DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
-    // Flag 0 is the normal browser-style H.264 path. Flag 1 tells MVD to
-    // short-circuit coded non-IDR slices with MVD_STATUS_NALUPROCFLAG, which
-    // effectively skips normal frames and is inappropriate for game streaming.
-    const int ret = mvdstdProcessVideoFrame(indata, inlen, 0, NULL);
-    if (!MVD_CHECKNALUPROC_SUCCESS(ret)) {
-        return DecodeReturnStatus::ERROR;
-    }
+    // A Moonlight decode unit may contain several Annex-B NAL units (for
+    // example SPS + PPS + slice). MVD can report INCOMPLETEPROCESSING with the
+    // amount of data still unconsumed, so walk the whole decode unit rather
+    // than discarding everything after the first NAL.
+    unsigned char *cursor = indata;
+    size_t remaining = inlen > 0 ? static_cast<size_t>(inlen) : 0;
 
-    // libctru defines 0x17003 as MVD_STATUS_FRAMEREADY. Parameter-set,
-    // incomplete-processing, OK-without-frame, and NAL flag statuses must not
-    // present the previous RGB buffer again.
-    if (ret != MVD_STATUS_FRAMEREADY) {
+    // A normal video frame contains only a handful of NALs. The guard prevents
+    // malformed MVD progress information from ever spinning in the decoder
+    // callback.
+    for (int iteration = 0; remaining > 0 && iteration < 64; ++iteration) {
+        MVDSTD_ProcessNALUnitOut output{};
+
+        // Flag 0 is the normal browser-style H.264 path. Flag 1 tells MVD to
+        // short-circuit coded non-IDR slices with MVD_STATUS_NALUPROCFLAG,
+        // which is inappropriate for normal game-stream frames.
+        const int ret =
+            mvdstdProcessVideoFrame(cursor, remaining, 0, &output);
+        if (!MVD_CHECKNALUPROC_SUCCESS(ret)) {
+            return DecodeReturnStatus::ERROR;
+        }
+
+        if (ret == MVD_STATUS_FRAMEREADY) {
+            const int render_ret =
+                mvdstdRenderVideoFrame(&mvdstd_config, true);
+            return render_ret == MVD_STATUS_OK ? DecodeReturnStatus::SUCCESS
+                                               : DecodeReturnStatus::ERROR;
+        }
+
+        // When MVD leaves bytes unconsumed, advance to exactly that remainder.
+        // This handles SPS/PPS followed by the coded slice in the same decode
+        // unit without presenting stale RGB data for the parameter NALs.
+        if (output.remaining_size > 0 && output.remaining_size < remaining) {
+            const size_t consumed = remaining - output.remaining_size;
+            cursor += consumed;
+            remaining = output.remaining_size;
+            continue;
+        }
+
+        // PARAMSET/OK/NALUPROCFLAG without a remainder consumed this input but
+        // did not produce a complete display frame.
         return DecodeReturnStatus::NO_FRAME_PRODUCED;
     }
 
-    const int render_ret = mvdstdRenderVideoFrame(&mvdstd_config, true);
-    if (render_ret != MVD_STATUS_OK) {
+    // Reaching the guard with data remaining means MVD failed to make progress.
+    if (remaining > 0) {
         return DecodeReturnStatus::ERROR;
     }
-    return DecodeReturnStatus::SUCCESS;
+    return DecodeReturnStatus::NO_FRAME_PRODUCED;
 }
 
 int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
