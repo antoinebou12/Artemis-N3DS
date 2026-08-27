@@ -27,14 +27,9 @@
 
 #define MOON_CTR_VIDEO_TEX_W 1024
 #define MOON_CTR_VIDEO_TEX_H 512
-// TODO: No idea why, but this seems to be the magic number to make dual screen
-// offsets work
 #define MOON_CTR_VIDEO_TEX_H_OFFSET 32
 #define CMDLIST_SZ 0x800
 
-// PICA textures need power-of-two backing dimensions, but small streams do not
-// need the old unconditional 1024x512 surface. Keeping the decoder and renderer
-// on the same adaptive stride saves substantial transfer bandwidth.
 inline int moon_video_texture_width(int image_width) {
     return image_width <= 512 ? 512 : MOON_CTR_VIDEO_TEX_W;
 }
@@ -55,7 +50,8 @@ class N3dsRendererBase {
     N3dsRendererBase(gfxScreen_t screen_in, int surface_width_in,
                      int surface_height_in, int image_width_in,
                      int image_height_in, int pixel_size,
-                     bool debug_in = false);
+                     bool debug_in = false, int texture_width_override = 0,
+                     int texture_height_override = 0);
     virtual ~N3dsRendererBase();
 
   protected:
@@ -84,9 +80,6 @@ class N3dsRendererBase {
     void *vramFb = NULL;
     void *vramTex = NULL;
 
-    // PICA pipeline state, shader setup, texture filtering, and quad geometry
-    // only change when presentation settings change. Cache the generated
-    // command list instead of rebuilding and flushing it every video frame.
     bool command_list_valid = false;
     bool letterbox_initialized = false;
     u32 cached_cmdlist_len = 0;
@@ -105,7 +98,8 @@ class N3dsRendererTop : public N3dsRendererBase {
 class N3dsRendererBottom : public N3dsRendererBase {
   public:
     N3dsRendererBottom(int src_width, int src_height, int px_size,
-                       bool debug_in = false);
+                       bool debug_in = false, int texture_width_override = 0,
+                       int texture_height_override = 0);
     ~N3dsRendererBottom() = default;
     void write_px_to_framebuffer(uint8_t *source);
     void write_px_to_framebuffer_raw(const uint8_t *source, int offset = 0,
