@@ -22,6 +22,34 @@ int main() {
     assert(std::strcmp(presentation_mode_name(PresentationMode::StereoSideBySide),
                        "Stereo SBS") == 0);
 
+    PresentationState fit;
+    fit.mode = PresentationMode::Fit;
+    const auto fit_geometry =
+        compute_presentation_geometry(1280, 720, 400, 240, fit);
+    assert(nearly_equal(fit_geometry.destination_scale_x, 1.0f));
+    assert(nearly_equal(fit_geometry.destination_scale_y, 0.75f));
+    assert(nearly_equal(fit_geometry.source_u_min, 0.0f));
+    assert(nearly_equal(fit_geometry.source_u_max, 1.0f));
+
+    PresentationState fill;
+    fill.mode = PresentationMode::Fill;
+    const auto fill_geometry =
+        compute_presentation_geometry(1280, 720, 400, 240, fill);
+    assert(nearly_equal(fill_geometry.destination_scale_x, 1.0f));
+    assert(nearly_equal(fill_geometry.destination_scale_y, 1.0f));
+    assert(nearly_equal(fill_geometry.source_u_min, 0.125f));
+    assert(nearly_equal(fill_geometry.source_u_max, 0.875f));
+
+    PresentationState magnify;
+    magnify.mode = PresentationMode::Magnify;
+    magnify.zoom = 2.0f;
+    const auto magnify_geometry =
+        compute_presentation_geometry(800, 480, 400, 240, magnify);
+    assert(nearly_equal(magnify_geometry.source_u_min, 0.25f));
+    assert(nearly_equal(magnify_geometry.source_u_max, 0.75f));
+    assert(nearly_equal(magnify_geometry.source_v_min, 0.25f));
+    assert(nearly_equal(magnify_geometry.source_v_max, 0.75f));
+
     StreamTelemetry telemetry;
     telemetry.push({4.0f, 2.0f, 16.0f, 60.0f, 1500, 0});
     telemetry.push({6.0f, 4.0f, 20.0f, 50.0f, 1500, 1});
@@ -35,6 +63,11 @@ int main() {
     assert(nearly_equal(summary.max_frame_ms, 20.0f));
     assert(summary.bitrate_kbps == 1500);
     assert(summary.dropped_frames == 1);
+
+    StreamTelemetrySample copied[2]{};
+    assert(telemetry.copy_samples(copied, 2) == 2);
+    assert(nearly_equal(copied[0].decode_ms, 4.0f));
+    assert(nearly_equal(copied[1].decode_ms, 6.0f));
 
     telemetry.reset();
     assert(telemetry.size() == 0);
