@@ -19,7 +19,6 @@ constexpr u32 kSurfaceSelected = C2D_Color32(43, 54, 68, 255);
 constexpr u32 kAccent = C2D_Color32(72, 171, 255, 255);
 constexpr u32 kText = C2D_Color32(240, 244, 248, 255);
 constexpr u32 kMuted = C2D_Color32(155, 166, 179, 255);
-constexpr u32 kDanger = C2D_Color32(255, 103, 115, 255);
 
 void draw_text(const std::string &value, float x, float y, float scale,
                u32 color, float wrap_width = 0.0f) {
@@ -54,7 +53,7 @@ void draw_header(const std::string &title, const std::string &subtitle) {
 void draw_bottom_actions(const std::string &secondary_label,
                          bool allow_refresh) {
     draw_text("Artemis 3DS", 14.0f, 12.0f, 0.58f, kText);
-    draw_text("Streaming client", 14.0f, 37.0f, 0.38f, kMuted);
+    draw_text("Moonlight for Nintendo 3DS", 14.0f, 37.0f, 0.38f, kMuted);
 
     const float button_y = 188.0f;
     const float button_h = 42.0f;
@@ -63,11 +62,10 @@ void draw_bottom_actions(const std::string &secondary_label,
     C2D_DrawRectSolid(162.0f, button_y, 0.3f, 72.0f, button_h, kSurface);
     C2D_DrawRectSolid(240.0f, button_y, 0.3f, 74.0f, button_h, kAccent);
 
-    draw_text("B  Back", 13.0f, 199.0f, 0.36f, kText);
+    draw_text("B Back", 13.0f, 199.0f, 0.36f, kText);
     if (!secondary_label.empty()) {
         draw_text("Y", 91.0f, 199.0f, 0.36f, kAccent);
-        draw_text(secondary_label, 105.0f, 199.0f, 0.31f, kText,
-                  48.0f);
+        draw_text(secondary_label, 105.0f, 199.0f, 0.31f, kText, 48.0f);
     }
     if (allow_refresh) {
         draw_text("X Refresh", 168.0f, 199.0f, 0.33f, kText);
@@ -77,13 +75,20 @@ void draw_bottom_actions(const std::string &secondary_label,
 }
 
 void begin_frame() {
+    if (!g_active) {
+        return;
+    }
     C2D_TextBufClear(g_text_buffer);
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
     C2D_TargetClear(g_top, kBackground);
     C2D_TargetClear(g_bottom, kBackground);
 }
 
-void end_frame() { C3D_FrameEnd(0); }
+void end_frame() {
+    if (g_active) {
+        C3D_FrameEnd(0);
+    }
+}
 
 void draw_menu_frame(const std::string &title, const std::string &subtitle,
                      const std::vector<std::string> &items, int selected,
@@ -97,7 +102,7 @@ void draw_menu_frame(const std::string &title, const std::string &subtitle,
     if (items.empty()) {
         C2D_DrawRectSolid(18.0f, 82.0f, 0.3f, 364.0f, 92.0f, kSurface);
         draw_text("No items found", 34.0f, 101.0f, 0.58f, kText);
-        draw_text("Press X to search again or add a host manually.", 34.0f,
+        draw_text("Press X to search again or Y to add a host manually.", 34.0f,
                   132.0f, 0.39f, kMuted, 325.0f);
     } else {
         const int visible_count = 5;
@@ -148,11 +153,18 @@ bool n3ds_ui_init() {
         return true;
     }
 
+    gfxSetDoubleBuffering(GFX_TOP, true);
+    gfxSetDoubleBuffering(GFX_BOTTOM, true);
+
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) {
+        gfxSetDoubleBuffering(GFX_TOP, false);
+        gfxSetDoubleBuffering(GFX_BOTTOM, false);
         return false;
     }
     if (!C2D_Init(C2D_DEFAULT_MAX_OBJECTS)) {
         C3D_Fini();
+        gfxSetDoubleBuffering(GFX_TOP, false);
+        gfxSetDoubleBuffering(GFX_BOTTOM, false);
         return false;
     }
 
@@ -162,6 +174,8 @@ bool n3ds_ui_init() {
     g_text_buffer = C2D_TextBufNew(4096);
 
     if (g_top == nullptr || g_bottom == nullptr || g_text_buffer == nullptr) {
+        // Mark active so shutdown performs the C2D/C3D cleanup path.
+        g_active = true;
         n3ds_ui_shutdown();
         return false;
     }
@@ -191,6 +205,9 @@ void n3ds_ui_shutdown() {
 
     C2D_Fini();
     C3D_Fini();
+
+    gfxSetDoubleBuffering(GFX_TOP, false);
+    gfxSetDoubleBuffering(GFX_BOTTOM, false);
     g_active = false;
 }
 
@@ -203,6 +220,10 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                           const std::string &secondary_label,
                           bool allow_refresh) {
     UiMenuResult result{};
+    if (!g_active) {
+        return result;
+    }
+
     int selected = items.empty()
                        ? -1
                        : std::clamp(selected_index, 0,
@@ -288,6 +309,10 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
 
 void n3ds_ui_message(const std::string &title, const std::string &message,
                      const std::string &hint) {
+    if (!g_active) {
+        return;
+    }
+
     while (aptMainLoop()) {
         begin_frame();
         C2D_SceneBegin(g_top);
@@ -311,6 +336,10 @@ void n3ds_ui_message(const std::string &title, const std::string &message,
 void n3ds_ui_status(const std::string &title, const std::string &subtitle,
                     const std::vector<std::string> &lines,
                     const std::string &hint) {
+    if (!g_active) {
+        return;
+    }
+
     begin_frame();
     C2D_SceneBegin(g_top);
     draw_header(title, subtitle);
