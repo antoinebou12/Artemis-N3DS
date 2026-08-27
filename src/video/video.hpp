@@ -101,6 +101,7 @@ class MvdDecoder : public VideoDecoderBase {
     MVDSTD_Config mvdstd_config;
     u8 *rgb_img_buffer;
     bool first_frame = true;
+    u64 last_present_ticks = 0;
 };
 
 extern DECODER_RENDERER_CALLBACKS decoder_callbacks_n3ds;
