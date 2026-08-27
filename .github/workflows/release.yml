@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Run foundation tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror \
+            -Isrc \
+            tests/foundation_smoke.cpp \
+            src/presentation_state.cpp \
+            src/stream_telemetry.cpp \
+            -o /tmp/moonlight-n3ds-foundation-tests
+          /tmp/moonlight-n3ds-foundation-tests
+
+      - name: Build toolchain image
+        run: docker build --network=host -t moonlight-n3ds .
+
+      - name: Build Moonlight for 3DS
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/moonlight-N3DS" \
+            -w /moonlight-N3DS \
+            moonlight-n3ds:latest \
+            make -j2
+
+      - name: Verify release artifacts
+        run: |
+          test -s moonlight.cia
+          test -s moonlight.3dsx
+          sha256sum moonlight.cia moonlight.3dsx > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" \
+            moonlight.cia \
+            moonlight.3dsx \
+            SHA256SUMS.txt \
+            --clobber
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonlight-n3ds-release-${{ github.ref_name }}
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            moonlight.cia
+            moonlight.3dsx
+            SHA256SUMS.txt
