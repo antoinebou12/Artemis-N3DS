@@ -32,6 +32,17 @@
 #define MOON_CTR_VIDEO_TEX_H_OFFSET 32
 #define CMDLIST_SZ 0x800
 
+// PICA textures need power-of-two backing dimensions, but small streams do not
+// need the old unconditional 1024x512 surface. Keeping the decoder and renderer
+// on the same adaptive stride saves substantial transfer bandwidth.
+inline int moon_video_texture_width(int image_width) {
+    return image_width <= 512 ? 512 : MOON_CTR_VIDEO_TEX_W;
+}
+
+inline int moon_video_texture_height(int image_height) {
+    return image_height <= 256 ? 256 : MOON_CTR_VIDEO_TEX_H;
+}
+
 class IN3dsRenderer {
   public:
     virtual ~IN3dsRenderer() = default;
@@ -65,6 +76,8 @@ class N3dsRendererBase {
     int surface_height;
     int image_width;
     int image_height;
+    int texture_width;
+    int texture_height;
     int px_size;
     bool debug;
     u32 *cmdlist = NULL;
