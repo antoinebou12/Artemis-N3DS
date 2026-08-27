@@ -79,9 +79,27 @@ class MenuTouchHandler : public TouchHandlerBase {
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
     void _handle_touch_hold(touchPosition touch) override;
+    void redraw();
 
   private:
     std::shared_ptr<IMessage> message = nullptr;
+    u64 last_redraw_ticks = 0;
+};
+
+class PerformanceTouchHandler : public TouchHandlerBase {
+  public:
+    PerformanceTouchHandler();
+    ~PerformanceTouchHandler();
+
+  private:
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
+    void redraw(bool force = false);
+
+  private:
+    u64 last_redraw_ticks = 0;
+    char status_text[96] = {0};
 };
 
 class GamepadTouchHandler : public TouchHandlerBase {
