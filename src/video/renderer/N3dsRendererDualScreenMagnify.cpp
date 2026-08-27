@@ -31,7 +31,12 @@ N3dsRendererDualScreenMagnify::N3dsRendererDualScreenMagnify(
     int dest_width, int dest_height, int src_width, int src_height, int px_size)
     : image_width(src_width), image_height(src_height), px_size(px_size),
       top_renderer(dest_width, dest_height, src_width, src_height, px_size),
-      bottom_renderer(GSP_SCREEN_HEIGHT_BOTTOM, GSP_SCREEN_WIDTH, px_size) {
+      // The crop is a 320x240 visible window into the parent frame. Preserve
+      // the parent's row stride while only transferring enough rows for the
+      // bottom-screen view.
+      bottom_renderer(GSP_SCREEN_HEIGHT_BOTTOM, GSP_SCREEN_WIDTH, px_size,
+                      false, moon_video_texture_width(src_width),
+                      moon_video_texture_height(GSP_SCREEN_WIDTH)) {
     set_crop_region(GSP_SCREEN_HEIGHT_BOTTOM / 2, GSP_SCREEN_WIDTH / 2);
 
     auto pDispatcher = MessageDispatcher::get_instance();
