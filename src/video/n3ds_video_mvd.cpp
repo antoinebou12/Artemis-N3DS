@@ -18,6 +18,7 @@
  */
 
 #include "video.hpp"
+#include "../stream_telemetry.hpp"
 
 #include <3ds.h>
 
@@ -32,6 +33,11 @@
 #include <stdlib.h>
 
 static std::unique_ptr<MvdDecoder> instance = nullptr;
+
+static inline float ticks_to_ms(u64 ticks) {
+    return (static_cast<float>(ticks) * 1000.0f) /
+           static_cast<float>(SYSCLOCK_ARM11);
+}
 
 MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
                        void *context, int drFlags)
@@ -62,6 +68,8 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
     }
 
     first_frame = true;
+    last_present_ticks = 0;
+    global_stream_telemetry().reset();
     status = mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264,
                         MVD_OUTPUT_BGR565, size, NULL);
     if (status) {
@@ -124,7 +132,7 @@ DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
 }
 
 int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
-    u64 start_ticks = svcGetSystemTick();
+    const u64 decode_start_ticks = svcGetSystemTick();
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
 
@@ -143,11 +151,26 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     GSPGPU_FlushDataCache(nal_unit_buffer, length);
 
     _decode((unsigned char *)nal_unit_buffer, length);
+    const u64 decode_end_ticks = svcGetSystemTick();
 
     renderer_lock.lock();
-    renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
+    renderer->set_perf_decode_ticks(decode_end_ticks - decode_start_ticks);
+    const u64 render_start_ticks = svcGetSystemTick();
     renderer->write_px_to_framebuffer(rgb_img_buffer);
+    const u64 present_ticks = svcGetSystemTick();
     renderer_lock.unlock();
+
+    StreamTelemetrySample sample{};
+    sample.decode_ms = ticks_to_ms(decode_end_ticks - decode_start_ticks);
+    sample.render_ms = ticks_to_ms(present_ticks - render_start_ticks);
+    if (last_present_ticks != 0) {
+        sample.frame_ms = ticks_to_ms(present_ticks - last_present_ticks);
+        if (sample.frame_ms > 0.0f) {
+            sample.fps = 1000.0f / sample.frame_ms;
+        }
+    }
+    global_stream_telemetry().push(sample);
+    last_present_ticks = present_ticks;
 
     // If MVD never gets an IDR frame, everything shows up gray
     if (first_frame) {
