@@ -79,11 +79,14 @@ class MenuTouchHandler : public TouchHandlerBase {
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
     void _handle_touch_hold(touchPosition touch) override;
-    void redraw();
+    void redraw(bool force = false);
+    void update_touch_target(touchPosition touch);
 
   private:
     std::shared_ptr<IMessage> message = nullptr;
     u64 last_redraw_ticks = 0;
+    int active_row = -1;
+    int active_col = -1;
 };
 
 class PerformanceTouchHandler : public TouchHandlerBase {
