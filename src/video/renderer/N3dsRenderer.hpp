@@ -18,6 +18,7 @@
  */
 #pragma once
 
+#include "../../presentation_state.hpp"
 #include "../../system/AtomicVar.hpp"
 #include "../../system/subscriber.hpp"
 #include <3ds.h>
@@ -55,8 +56,8 @@ class N3dsRendererBase {
 
   public:
     u64 perf_frame_target_ticks = SYSCLOCK_ARM11 * ((double)(1.0 / 60.0));
-    u64 perf_decode_ticks;
-    u64 perf_fbcopy_ticks;
+    u64 perf_decode_ticks = 0;
+    u64 perf_fbcopy_ticks = 0;
 
   protected:
     gfxScreen_t screen;
@@ -69,6 +70,14 @@ class N3dsRendererBase {
     u32 *cmdlist = NULL;
     void *vramFb = NULL;
     void *vramTex = NULL;
+
+    // PICA pipeline state, shader setup, texture filtering, and quad geometry
+    // only change when presentation settings change. Cache the generated
+    // command list instead of rebuilding and flushing it every video frame.
+    bool command_list_valid = false;
+    bool letterbox_initialized = false;
+    u32 cached_cmdlist_len = 0;
+    PresentationState cached_presentation_state{};
 };
 
 class N3dsRendererTop : public N3dsRendererBase {
