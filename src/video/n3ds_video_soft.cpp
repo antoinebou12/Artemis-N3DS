@@ -64,8 +64,10 @@ SoftVideoDecoder::SoftVideoDecoder(int videoFormat, int width, int height,
         throw std::runtime_error("Failed to set Y2RU params\n");
     }
 
-    rgb_img_buffer = (u8 *)linearAlloc(MOON_CTR_VIDEO_TEX_W *
-                                       MOON_CTR_VIDEO_TEX_H * pixel_size);
+    const int texture_width = moon_video_texture_width(image_width);
+    const int texture_height = moon_video_texture_height(image_height);
+    rgb_img_buffer =
+        (u8 *)linearAlloc(texture_width * texture_height * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
         throw std::runtime_error("Out of memory!\n");
@@ -83,7 +85,7 @@ inline int SoftVideoDecoder::_write_yuv_to_framebuffer(const u8 **source,
                                                        int px_size) {
     Handle conversion_finish_event_handle;
     int status = 0;
-    u64 start_ticks = svcGetSystemTick();
+    const u64 start_ticks = svcGetSystemTick();
 
     status = Y2RU_SetSendingY(source[0], width * height, width, 0);
     if (status) {
@@ -103,9 +105,11 @@ inline int SoftVideoDecoder::_write_yuv_to_framebuffer(const u8 **source,
         goto y2ru_failed;
     }
 
+    const int texture_width = moon_video_texture_width(width);
+    const int texture_height = moon_video_texture_height(height);
     status = Y2RU_SetReceiving(
-        rgb_img_buffer, MOON_CTR_VIDEO_TEX_W * MOON_CTR_VIDEO_TEX_H * px_size,
-        width * px_size, (MOON_CTR_VIDEO_TEX_W - width) * px_size);
+        rgb_img_buffer, texture_width * texture_height * px_size,
+        width * px_size, (texture_width - width) * px_size);
     if (status) {
         fprintf(stderr, "Y2RU_SetReceiving failed\n");
         goto y2ru_failed;
@@ -153,10 +157,12 @@ int SoftVideoDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     ffmpeg_decode((unsigned char *)ffmpeg_buffer, length);
 
     AVFrame *frame = ffmpeg_get_frame(false);
-    int status = _write_yuv_to_framebuffer(
-        (const u8 **)frame->data, image_width, image_height, pixel_size);
+    if (frame == nullptr) {
+        return DR_OK;
+    }
 
-    return status;
+    return _write_yuv_to_framebuffer((const u8 **)frame->data, image_width,
+                                     image_height, pixel_size);
 }
 
 static int soft_video_setup(int videoFormat, int width, int height,
