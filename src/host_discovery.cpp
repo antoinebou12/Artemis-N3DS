@@ -18,8 +18,11 @@
 
 namespace {
 constexpr std::uint16_t kGameStreamHttpPort = 47989;
-constexpr int kBatchSize = 24;
-constexpr long kBatchTimeoutUs = 70000;
+// A /24 now completes in at most six short select windows instead of eleven.
+// Keep this below FD_SETSIZE and small enough for the 3DS socket service.
+constexpr int kBatchSize = 48;
+constexpr long kBatchTimeoutUs = 40000;
+constexpr int kDiscoverySocketBuffer = 2048;
 
 struct PendingSocket {
     int fd = -1;
@@ -82,6 +85,15 @@ void append_if_new(std::vector<DiscoveredHost> &hosts,
     }
 }
 
+void configure_probe_socket(int fd) {
+    // Discovery sockets only carry a TCP SYN. Tiny buffers reduce SOC memory
+    // pressure when dozens of probes are in flight at once.
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &kDiscoverySocketBuffer,
+               sizeof(kDiscoverySocketBuffer));
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &kDiscoverySocketBuffer,
+               sizeof(kDiscoverySocketBuffer));
+}
+
 void scan_batch(std::uint32_t first_ip, std::uint32_t last_ip,
                 std::uint32_t local_ip, std::vector<DiscoveredHost> &hosts,
                 std::set<std::string> &seen) {
@@ -101,9 +113,13 @@ void scan_batch(std::uint32_t first_ip, std::uint32_t last_ip,
             continue;
         }
 
+        configure_probe_socket(fd);
+
         const int old_flags = fcntl(fd, F_GETFL, 0);
-        if (old_flags >= 0) {
-            fcntl(fd, F_SETFL, old_flags | O_NONBLOCK);
+        if (old_flags < 0 || fcntl(fd, F_SETFL, old_flags | O_NONBLOCK) < 0) {
+            // Never allow discovery to fall back to a blocking connect.
+            close(fd);
+            continue;
         }
 
         sockaddr_in target{};
@@ -121,6 +137,12 @@ void scan_batch(std::uint32_t first_ip, std::uint32_t last_ip,
         }
 
         if (errno != EINPROGRESS && errno != EWOULDBLOCK) {
+            close(fd);
+            continue;
+        }
+
+        // select() cannot represent descriptors outside FD_SETSIZE.
+        if (fd >= FD_SETSIZE) {
             close(fd);
             continue;
         }
@@ -161,6 +183,14 @@ void scan_batch(std::uint32_t first_ip, std::uint32_t last_ip,
         close(pending_socket.fd);
     }
 }
+
+std::uint32_t ipv4_sort_key(const std::string &address) {
+    in_addr parsed{};
+    if (inet_pton(AF_INET, address.c_str(), &parsed) != 1) {
+        return UINT32_MAX;
+    }
+    return ntohl(parsed.s_addr);
+}
 } // namespace
 
 std::vector<DiscoveredHost> discover_moonlight_hosts() {
@@ -196,8 +226,7 @@ std::vector<DiscoveredHost> discover_moonlight_hosts() {
     std::uint32_t last_host = broadcast - 1;
 
     // Avoid huge scans on unusually broad subnets. Most home networks are /24;
-    // on broader networks we scan the 3DS's local /24, which keeps discovery
-    // responsive and bounded.
+    // on broader networks scan the 3DS's local /24 to keep discovery bounded.
     if (last_host - first_host + 1 > 254) {
         network = local_ip & 0xFFFFFF00u;
         first_host = network + 1;
@@ -219,7 +248,15 @@ std::vector<DiscoveredHost> discover_moonlight_hosts() {
                          if (a.saved != b.saved) {
                              return a.saved > b.saved;
                          }
-                         return a.address < b.address;
+                         const auto a_ip = ipv4_sort_key(a.address);
+                         const auto b_ip = ipv4_sort_key(b.address);
+                         if (a_ip != b_ip) {
+                             return a_ip < b_ip;
+                         }
+                         if (a.address != b.address) {
+                             return a.address < b.address;
+                         }
+                         return a.port < b.port;
                      });
     return hosts;
 }
