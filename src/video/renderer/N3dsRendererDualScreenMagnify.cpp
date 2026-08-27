@@ -52,38 +52,34 @@ void N3dsRendererDualScreenMagnify::accept(IMessage *msg) {
 
 void N3dsRendererDualScreenMagnify::set_crop_region(int center_x,
                                                     int center_y) {
-
-    int x_center_image = (center_x * image_width) / GSP_SCREEN_HEIGHT_BOTTOM;
-    int y_center_image = (center_y * image_height) / GSP_SCREEN_WIDTH;
-
-    int y_offset_image = y_center_image - (GSP_SCREEN_WIDTH / 2);
+    const int x_center_image =
+        (center_x * image_width) / GSP_SCREEN_HEIGHT_BOTTOM;
+    const int y_center_image = (center_y * image_height) / GSP_SCREEN_WIDTH;
 
     int crop_offset_x = x_center_image - (GSP_SCREEN_HEIGHT_BOTTOM / 2);
     int crop_offset_y = y_center_image - (GSP_SCREEN_WIDTH / 2);
 
-    int max_offset_x = image_width - GSP_SCREEN_HEIGHT_BOTTOM;
+    const int max_offset_x =
+        std::max(0, image_width - GSP_SCREEN_HEIGHT_BOTTOM);
     if (crop_offset_x < 0) {
         crop_offset_x = 0;
     } else if (crop_offset_x > max_offset_x) {
         crop_offset_x = max_offset_x;
     }
 
-    int max_offset_y = image_height - GSP_SCREEN_WIDTH;
+    const int max_offset_y = std::max(0, image_height - GSP_SCREEN_WIDTH);
     if (crop_offset_y < 0) {
         crop_offset_y = 0;
     } else if (crop_offset_y > max_offset_y) {
         crop_offset_y = max_offset_y;
     }
 
-    int line_stride = MOON_CTR_VIDEO_TEX_W * px_size;
-
+    const int line_stride = moon_video_texture_width(image_width) * px_size;
     pixel_offset.store(crop_offset_y * line_stride + crop_offset_x * px_size);
 }
 
 void N3dsRendererDualScreenMagnify::write_px_to_framebuffer(uint8_t *source) {
-    // Render full resolution on top screen
     top_renderer.write_px_to_framebuffer(source);
-    // Render magnified region on bottom screen
     bottom_renderer.write_px_to_framebuffer(source + pixel_offset.load());
 }
 
