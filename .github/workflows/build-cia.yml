@@ -1,26 +1,84 @@
-name: Build CIA
+name: CI
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - n3ds-main
+      - "feature/**"
+      - "fix/**"
   pull_request:
+    branches:
+      - n3ds-main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-cia:
+  foundation-tests:
+    name: Foundation tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout Repo
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check whitespace errors
+        run: git diff --check HEAD^ HEAD || git diff --check
+
+      - name: Build host smoke tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror \
+            -Isrc \
+            tests/foundation_smoke.cpp \
+            src/presentation_state.cpp \
+            src/stream_telemetry.cpp \
+            -o /tmp/moonlight-n3ds-foundation-tests
+
+      - name: Run host smoke tests
+        run: /tmp/moonlight-n3ds-foundation-tests
+
+  build-cia:
+    name: Build CIA and 3DSX
+    needs: foundation-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Build Dockerfile
+
+      - name: Verify submodules
+        run: git submodule status --recursive
+
+      - name: Build toolchain image
         run: docker build --network=host -t moonlight-n3ds .
-      - name: Build CIA
-        run: docker run --rm -v .:/moonlight-N3DS -w /moonlight-N3DS moonlight-n3ds:latest make
-      - name: Upload Artifacts
+
+      - name: Build Moonlight for 3DS
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/moonlight-N3DS" \
+            -w /moonlight-N3DS \
+            moonlight-n3ds:latest \
+            make -j2
+
+      - name: Verify release artifacts
+        run: |
+          test -s moonlight.cia
+          test -s moonlight.3dsx
+          ls -lh moonlight.cia moonlight.3dsx
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.repository.name }}
+          name: moonlight-n3ds-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
           path: |
-            ./*.cia
-            ./*.3dsx
+            moonlight.cia
+            moonlight.3dsx
