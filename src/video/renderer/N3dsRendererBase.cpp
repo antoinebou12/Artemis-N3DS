@@ -42,10 +42,13 @@ N3dsRendererBase::N3dsRendererBase(gfxScreen_t screen_in, int surface_width_in,
                                    bool debug_in)
     : screen(screen_in), surface_width(surface_width_in),
       surface_height(surface_height_in), image_width(image_width_in),
-      image_height(image_height_in), debug(debug_in), px_size(pixel_size) {
+      image_height(image_height_in),
+      texture_width(moon_video_texture_width(image_width_in)),
+      texture_height(moon_video_texture_height(image_height_in)),
+      px_size(pixel_size), debug(debug_in) {
     cmdlist = (u32 *)linearAlloc(CMDLIST_SZ * 4);
     vramFb = vramAlloc(surface_width * surface_height * px_size);
-    vramTex = vramAlloc(MOON_CTR_VIDEO_TEX_W * MOON_CTR_VIDEO_TEX_H * px_size);
+    vramTex = vramAlloc(texture_width * texture_height * px_size);
 }
 
 N3dsRendererBase::~N3dsRendererBase() {
@@ -129,16 +132,10 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         image_width, image_height, logical_destination_width, GSP_SCREEN_WIDTH,
         presentation);
 
-    // The top framebuffer can be 800 pixels wide for wide/stereo output, but
-    // its physical aspect ratio is still 400x240. Presentation math therefore
-    // uses the logical 400-pixel width above.
     const bool needs_letterbox =
         geometry.destination_scale_x < 0.999f ||
         geometry.destination_scale_y < 0.999f;
 
-    // Letterbox bars are static in vramFb. Clearing the entire render target on
-    // every frame wastes a large VRAM write; clear once when entering/changing
-    // a letterboxed presentation and let subsequent video draws preserve bars.
     if (needs_letterbox) {
         if (!letterbox_initialized || presentation_changed) {
             memset(vramFb, 0, surface_width * surface_height * px_size);
@@ -148,13 +145,11 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         letterbox_initialized = false;
     }
 
-    // Video pixels are dynamic, so the linear decoder output still needs to be
-    // tiled into the PICA texture each frame.
+    // The decoder output uses the same adaptive power-of-two stride. This is
+    // 512x256 for 400x240, 1024x256 for 800x240 SBS, and 1024x512 for 800x480.
     GX_DisplayTransfer(
-        (u32 *)source,
-        GX_BUFFER_DIM(MOON_CTR_VIDEO_TEX_W, MOON_CTR_VIDEO_TEX_H),
-        (u32 *)vramTex,
-        GX_BUFFER_DIM(MOON_CTR_VIDEO_TEX_W, MOON_CTR_VIDEO_TEX_H),
+        (u32 *)source, GX_BUFFER_DIM(texture_width, texture_height),
+        (u32 *)vramTex, GX_BUFFER_DIM(texture_width, texture_height),
         GX_TRANSFER_FLIP_VERT(1) | GX_TRANSFER_OUT_TILED(1) |
             GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
             GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565));
@@ -205,7 +200,7 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
 
         C(GPUREG_TEXUNIT0_TYPE, GPU_RGB565);
         C(GPUREG_TEXUNIT0_DIM,
-          MOON_CTR_VIDEO_TEX_H | (MOON_CTR_VIDEO_TEX_W << 16));
+          texture_height | (texture_width << 16));
         C(GPUREG_TEXUNIT0_ADDR1, osConvertVirtToPhys(vramTex) >> 3);
         const u32 texture_filter =
             presentation.linear_filtering ? GPU_LINEAR : GPU_NEAREST;
@@ -297,18 +292,13 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
                                     3);                                        \
     }
 
-        const float sw = image_width / ((float)MOON_CTR_VIDEO_TEX_W);
-        const float sh = image_height / ((float)MOON_CTR_VIDEO_TEX_H);
+        const float sw = image_width / ((float)texture_width);
+        const float sh = image_height / ((float)texture_height);
         const float hh = 2.0f / surface_width;
 
-        // PICA renders into a 240x400/800 rotated framebuffer. Logical
-        // horizontal screen scaling maps to NDC Y, while logical vertical
-        // scaling maps to NDC X.
         const float ndc_x = geometry.destination_scale_y;
         const float ndc_y = geometry.destination_scale_x;
 
-        // Convert logical normalized crop UVs to the texture coordinates
-        // expected by the existing rotated/flipped texture path.
         const float tex_left = sw * (1.0f - geometry.source_u_min);
         const float tex_right = sw * (1.0f - geometry.source_u_max);
         const float tex_top = sh * (1.0f - geometry.source_v_min);
@@ -340,10 +330,6 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
 
         u32 *unused = nullptr;
         GPUCMD_Split(&unused, &cached_cmdlist_len);
-
-        // The command list is the only CPU-authored linear buffer consumed by
-        // P3D here. The old path flushed the entire linear heap every frame;
-        // flushing this exact range once per state rebuild is sufficient.
         GSPGPU_FlushDataCache(cmdlist,
                               cached_cmdlist_len * (u32)sizeof(u32));
 
@@ -351,8 +337,6 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         command_list_valid = true;
     }
 
-    // Allow CPU command-list construction to overlap the source->texture
-    // transfer on state-change frames. Cached frames get here immediately.
     gspWaitForEvent(GSPGPU_EVENT_PPF, 0);
 
     GX_ProcessCommandList(cmdlist, cached_cmdlist_len * 4, 2);
