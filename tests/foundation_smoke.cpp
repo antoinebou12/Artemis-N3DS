@@ -1,5 +1,6 @@
 #include "presentation_state.hpp"
 #include "stream_telemetry.hpp"
+#include "video/video_layout.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -49,6 +50,17 @@ int main() {
     assert(nearly_equal(magnify_geometry.source_u_max, 0.75f));
     assert(nearly_equal(magnify_geometry.source_v_min, 0.25f));
     assert(nearly_equal(magnify_geometry.source_v_max, 0.75f));
+
+    // Adaptive video backing surfaces keep PICA's power-of-two requirement but
+    // stop moving a 1024x512 texture for every small 3DS stream.
+    assert(moon_video_texture_width(400) == 512);
+    assert(moon_video_texture_height(240) == 256);
+    assert(moon_video_texture_width(800) == 1024);
+    assert(moon_video_texture_height(240) == 256);
+    assert(moon_video_texture_height(480) == 512);
+    assert(moon_video_texture_bytes(400, 240, 2) == 512 * 256 * 2);
+    assert(moon_video_texture_bytes(800, 240, 2) == 1024 * 256 * 2);
+    assert(moon_video_texture_bytes(800, 480, 2) == 1024 * 512 * 2);
 
     StreamTelemetry telemetry;
     telemetry.push({4.0f, 2.0f, 16.0f, 60.0f, 1500, 0});
