@@ -114,16 +114,23 @@ MvdDecoder::~MvdDecoder() {
 }
 
 DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
-    int ret = mvdstdProcessVideoFrame(indata, inlen, 1, NULL);
+    // Flag 0 is the normal browser-style H.264 path. Flag 1 tells MVD to
+    // short-circuit coded non-IDR slices with MVD_STATUS_NALUPROCFLAG, which
+    // effectively skips normal frames and is inappropriate for game streaming.
+    const int ret = mvdstdProcessVideoFrame(indata, inlen, 0, NULL);
     if (!MVD_CHECKNALUPROC_SUCCESS(ret)) {
         return DecodeReturnStatus::ERROR;
     }
 
-    if (ret != MVD_STATUS_PARAMSET && ret != MVD_STATUS_INCOMPLETEPROCESSING) {
+    // libctru defines 0x17003 as MVD_STATUS_FRAMEREADY. Parameter-set,
+    // incomplete-processing, OK-without-frame, and NAL flag statuses must not
+    // present the previous RGB buffer again.
+    if (ret != MVD_STATUS_FRAMEREADY) {
         return DecodeReturnStatus::NO_FRAME_PRODUCED;
     }
-    ret = mvdstdRenderVideoFrame(&mvdstd_config, true);
-    if (ret != MVD_STATUS_OK) {
+
+    const int render_ret = mvdstdRenderVideoFrame(&mvdstd_config, true);
+    if (render_ret != MVD_STATUS_OK) {
         return DecodeReturnStatus::ERROR;
     }
     return DecodeReturnStatus::SUCCESS;
@@ -152,14 +159,10 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
         _decode((unsigned char *)nal_unit_buffer, length);
     const u64 decode_end_ticks = svcGetSystemTick();
 
-    // Do not push the same RGB buffer through PICA when MVD only consumed
-    // parameter/incomplete data and produced no new frame.
     if (decode_status == DecodeReturnStatus::NO_FRAME_PRODUCED) {
         return DR_OK;
     }
     if (decode_status == DecodeReturnStatus::ERROR) {
-        // Recover quickly from corrupted/missing references instead of
-        // presenting stale video indefinitely.
         return DR_NEED_IDR;
     }
 
@@ -182,8 +185,6 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     push_global_stream_telemetry(sample);
     last_present_ticks = present_ticks;
 
-    // Ask for an IDR immediately after the first presented frame to avoid the
-    // MVD gray-output failure mode when joining mid-GOP.
     if (first_frame) {
         first_frame = false;
         return DR_NEED_IDR;
