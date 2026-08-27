@@ -31,6 +31,8 @@ class StreamTelemetry {
     void reset();
     void push(const StreamTelemetrySample &sample);
     StreamTelemetrySummary summary() const;
+    std::size_t copy_samples(StreamTelemetrySample *destination,
+                             std::size_t capacity) const;
     std::size_t size() const;
 
   private:
