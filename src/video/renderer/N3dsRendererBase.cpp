@@ -18,7 +18,6 @@
  */
 
 #include "N3dsRenderer.hpp"
-#include "../../presentation_state.hpp"
 #include "vshader_shbin.h"
 
 #include <3ds.h>
@@ -27,6 +26,15 @@
 #include <stdbool.h>
 #include <stdexcept>
 #include <unistd.h>
+
+namespace {
+bool same_presentation_state(const PresentationState &a,
+                             const PresentationState &b) {
+    return a.mode == b.mode && a.zoom == b.zoom && a.pan_x == b.pan_x &&
+           a.pan_y == b.pan_y &&
+           a.linear_filtering == b.linear_filtering;
+}
+} // namespace
 
 N3dsRendererBase::N3dsRendererBase(gfxScreen_t screen_in, int surface_width_in,
                                    int surface_height_in, int image_width_in,
@@ -108,12 +116,16 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         return;
     }
 
-    u64 start_ticks = svcGetSystemTick();
+    const u64 start_ticks = svcGetSystemTick();
 
     const PresentationState presentation = global_presentation_state();
+    const bool presentation_changed =
+        !command_list_valid ||
+        !same_presentation_state(presentation, cached_presentation_state);
+
     const int logical_destination_width =
         screen == GFX_TOP ? GSP_SCREEN_HEIGHT_TOP : GSP_SCREEN_HEIGHT_BOTTOM;
-    PresentationGeometry geometry = compute_presentation_geometry(
+    const PresentationGeometry geometry = compute_presentation_geometry(
         image_width, image_height, logical_destination_width, GSP_SCREEN_WIDTH,
         presentation);
 
@@ -123,10 +135,21 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
     const bool needs_letterbox =
         geometry.destination_scale_x < 0.999f ||
         geometry.destination_scale_y < 0.999f;
+
+    // Letterbox bars are static in vramFb. Clearing the entire render target on
+    // every frame wastes a large VRAM write; clear once when entering/changing
+    // a letterboxed presentation and let subsequent video draws preserve bars.
     if (needs_letterbox) {
-        memset(vramFb, 0, surface_width * surface_height * px_size);
+        if (!letterbox_initialized || presentation_changed) {
+            memset(vramFb, 0, surface_width * surface_height * px_size);
+        }
+        letterbox_initialized = true;
+    } else {
+        letterbox_initialized = false;
     }
 
+    // Video pixels are dynamic, so the linear decoder output still needs to be
+    // tiled into the PICA texture each frame.
     GX_DisplayTransfer(
         (u32 *)source,
         GX_BUFFER_DIM(MOON_CTR_VIDEO_TEX_W, MOON_CTR_VIDEO_TEX_H),
@@ -136,124 +159,129 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
             GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
             GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565));
 
-    GPUCMD_SetBuffer(cmdlist, CMDLIST_SZ, 0);
+    if (presentation_changed) {
+        GPUCMD_SetBuffer(cmdlist, CMDLIST_SZ, 0);
 
 #define C GPUCMD_AddWrite
 
-    C(GPUREG_FRAMEBUFFER_INVALIDATE, 1);
-    C(GPUREG_COLORBUFFER_LOC, osConvertVirtToPhys(vramFb) >> 3);
-    C(GPUREG_DEPTHBUFFER_LOC, 0);
-    C(GPUREG_RENDERBUF_DIM,
-      (1 << 24) | ((surface_width - 1) << 12) | surface_height);
-    C(GPUREG_FRAMEBUFFER_DIM,
-      (1 << 24) | ((surface_width - 1) << 12) | surface_height);
-    C(GPUREG_FRAMEBUFFER_BLOCK32, 0);
+        C(GPUREG_FRAMEBUFFER_INVALIDATE, 1);
+        C(GPUREG_COLORBUFFER_LOC, osConvertVirtToPhys(vramFb) >> 3);
+        C(GPUREG_DEPTHBUFFER_LOC, 0);
+        C(GPUREG_RENDERBUF_DIM,
+          (1 << 24) | ((surface_width - 1) << 12) | surface_height);
+        C(GPUREG_FRAMEBUFFER_DIM,
+          (1 << 24) | ((surface_width - 1) << 12) | surface_height);
+        C(GPUREG_FRAMEBUFFER_BLOCK32, 0);
 
-    C(GPUREG_DEPTH_COLOR_MASK, 0xF << 8);
-    C(GPUREG_EARLYDEPTH_TEST1, 0);
-    C(GPUREG_EARLYDEPTH_TEST2, 0);
-    C(GPUREG_COLORBUFFER_FORMAT, GPU_RGB565 << 16);
-    C(GPUREG_COLORBUFFER_READ, 0x0);
-    C(GPUREG_COLORBUFFER_WRITE, 0xF);
-    C(GPUREG_DEPTHBUFFER_READ, 0);
-    C(GPUREG_DEPTHBUFFER_WRITE, 0);
+        C(GPUREG_DEPTH_COLOR_MASK, 0xF << 8);
+        C(GPUREG_EARLYDEPTH_TEST1, 0);
+        C(GPUREG_EARLYDEPTH_TEST2, 0);
+        C(GPUREG_COLORBUFFER_FORMAT, GPU_RGB565 << 16);
+        C(GPUREG_COLORBUFFER_READ, 0x0);
+        C(GPUREG_COLORBUFFER_WRITE, 0xF);
+        C(GPUREG_DEPTHBUFFER_READ, 0);
+        C(GPUREG_DEPTHBUFFER_WRITE, 0);
 
-    C(GPUREG_VIEWPORT_XY, 0);
+        C(GPUREG_VIEWPORT_XY, 0);
 
-    C(GPUREG_VIEWPORT_WIDTH, f32tof24(surface_height / 2));
-    C(GPUREG_VIEWPORT_INVW, f32tof31(2.0 / ((double)surface_height)) << 1);
-    C(GPUREG_VIEWPORT_HEIGHT, f32tof24(surface_width / 2));
-    C(GPUREG_VIEWPORT_INVH, f32tof31(2.0 / ((double)surface_width)) << 1);
+        C(GPUREG_VIEWPORT_WIDTH, f32tof24(surface_height / 2));
+        C(GPUREG_VIEWPORT_INVW,
+          f32tof31(2.0 / ((double)surface_height)) << 1);
+        C(GPUREG_VIEWPORT_HEIGHT, f32tof24(surface_width / 2));
+        C(GPUREG_VIEWPORT_INVH,
+          f32tof31(2.0 / ((double)surface_width)) << 1);
 
-    C(GPUREG_SCISSORTEST_MODE, 0);
-    C(GPUREG_SCISSORTEST_POS, 0);
-    C(GPUREG_SCISSORTEST_DIM, 0);
+        C(GPUREG_SCISSORTEST_MODE, 0);
+        C(GPUREG_SCISSORTEST_POS, 0);
+        C(GPUREG_SCISSORTEST_DIM, 0);
 
-    C(GPUREG_DEPTHMAP_ENABLE, 1);
-    C(GPUREG_DEPTHMAP_SCALE, f32tof24(-1.0));
-    C(GPUREG_DEPTHMAP_OFFSET, 0);
-    C(GPUREG_STENCIL_TEST, 0);
-    C(GPUREG_FRAGOP_ALPHA_TEST, 0);
-    C(GPUREG_LOGIC_OP, 3);
-    C(GPUREG_COLOR_OPERATION, 0x00E40000);
+        C(GPUREG_DEPTHMAP_ENABLE, 1);
+        C(GPUREG_DEPTHMAP_SCALE, f32tof24(-1.0));
+        C(GPUREG_DEPTHMAP_OFFSET, 0);
+        C(GPUREG_STENCIL_TEST, 0);
+        C(GPUREG_FRAGOP_ALPHA_TEST, 0);
+        C(GPUREG_LOGIC_OP, 3);
+        C(GPUREG_COLOR_OPERATION, 0x00E40000);
 
-    C(GPUREG_TEXUNIT0_TYPE, GPU_RGB565);
-    C(GPUREG_TEXUNIT0_DIM, MOON_CTR_VIDEO_TEX_H | (MOON_CTR_VIDEO_TEX_W << 16));
-    C(GPUREG_TEXUNIT0_ADDR1, osConvertVirtToPhys(vramTex) >> 3);
-    const u32 texture_filter =
-        presentation.linear_filtering ? GPU_LINEAR : GPU_NEAREST;
-    C(GPUREG_TEXUNIT0_PARAM, texture_filter | (texture_filter << 1));
+        C(GPUREG_TEXUNIT0_TYPE, GPU_RGB565);
+        C(GPUREG_TEXUNIT0_DIM,
+          MOON_CTR_VIDEO_TEX_H | (MOON_CTR_VIDEO_TEX_W << 16));
+        C(GPUREG_TEXUNIT0_ADDR1, osConvertVirtToPhys(vramTex) >> 3);
+        const u32 texture_filter =
+            presentation.linear_filtering ? GPU_LINEAR : GPU_NEAREST;
+        C(GPUREG_TEXUNIT0_PARAM, texture_filter | (texture_filter << 1));
 
-    C(GPUREG_TEXUNIT_CONFIG, 1 | (1 << 12) | (1 << 16));
+        C(GPUREG_TEXUNIT_CONFIG, 1 | (1 << 12) | (1 << 16));
 
-    C(GPUREG_TEXENV0_SOURCE, 0x003003);
-    C(GPUREG_TEXENV0_OPERAND, 0);
-    C(GPUREG_TEXENV0_COMBINER, 0);
-    C(GPUREG_TEXENV0_SCALE, 0);
+        C(GPUREG_TEXENV0_SOURCE, 0x003003);
+        C(GPUREG_TEXENV0_OPERAND, 0);
+        C(GPUREG_TEXENV0_COMBINER, 0);
+        C(GPUREG_TEXENV0_SCALE, 0);
 
-    C(GPUREG_TEXENV1_SOURCE, 0x003003);
-    C(GPUREG_TEXENV1_OPERAND, 0);
-    C(GPUREG_TEXENV1_COMBINER, 0);
-    C(GPUREG_TEXENV1_SCALE, 0);
+        C(GPUREG_TEXENV1_SOURCE, 0x003003);
+        C(GPUREG_TEXENV1_OPERAND, 0);
+        C(GPUREG_TEXENV1_COMBINER, 0);
+        C(GPUREG_TEXENV1_SCALE, 0);
 
-    C(GPUREG_TEXENV2_SOURCE, 0x003003);
-    C(GPUREG_TEXENV2_OPERAND, 0);
-    C(GPUREG_TEXENV2_COMBINER, 0);
-    C(GPUREG_TEXENV2_SCALE, 0);
+        C(GPUREG_TEXENV2_SOURCE, 0x003003);
+        C(GPUREG_TEXENV2_OPERAND, 0);
+        C(GPUREG_TEXENV2_COMBINER, 0);
+        C(GPUREG_TEXENV2_SCALE, 0);
 
-    C(GPUREG_TEXENV3_SOURCE, 0x003003);
-    C(GPUREG_TEXENV3_OPERAND, 0);
-    C(GPUREG_TEXENV3_COMBINER, 0);
-    C(GPUREG_TEXENV3_SCALE, 0);
+        C(GPUREG_TEXENV3_SOURCE, 0x003003);
+        C(GPUREG_TEXENV3_OPERAND, 0);
+        C(GPUREG_TEXENV3_COMBINER, 0);
+        C(GPUREG_TEXENV3_SCALE, 0);
 
-    C(GPUREG_TEXENV4_SOURCE, 0x003003);
-    C(GPUREG_TEXENV4_OPERAND, 0);
-    C(GPUREG_TEXENV4_COMBINER, 0);
-    C(GPUREG_TEXENV4_SCALE, 0);
+        C(GPUREG_TEXENV4_SOURCE, 0x003003);
+        C(GPUREG_TEXENV4_OPERAND, 0);
+        C(GPUREG_TEXENV4_COMBINER, 0);
+        C(GPUREG_TEXENV4_SCALE, 0);
 
-    C(GPUREG_TEXENV5_SOURCE, 0x003003);
-    C(GPUREG_TEXENV5_OPERAND, 0);
-    C(GPUREG_TEXENV5_COMBINER, 0);
-    C(GPUREG_TEXENV5_SCALE, 0);
+        C(GPUREG_TEXENV5_SOURCE, 0x003003);
+        C(GPUREG_TEXENV5_OPERAND, 0);
+        C(GPUREG_TEXENV5_COMBINER, 0);
+        C(GPUREG_TEXENV5_SCALE, 0);
 
-    C(GPUREG_ATTRIBBUFFERS_LOC, 0);
-    C(GPUREG_ATTRIBBUFFERS_FORMAT_LOW, 0);
-    C(GPUREG_ATTRIBBUFFERS_FORMAT_HIGH,
-      (0xFFF << 16) | (1 << 28));
+        C(GPUREG_ATTRIBBUFFERS_LOC, 0);
+        C(GPUREG_ATTRIBBUFFERS_FORMAT_LOW, 0);
+        C(GPUREG_ATTRIBBUFFERS_FORMAT_HIGH,
+          (0xFFF << 16) | (1 << 28));
 
-    static DVLB_s *vshader_dvlb = NULL;
-    static shaderProgram_s program;
+        static DVLB_s *vshader_dvlb = NULL;
+        static shaderProgram_s program;
 
-    if (!vshader_dvlb) {
-        vshader_dvlb = DVLB_ParseFile((u32 *)vshader_shbin, vshader_shbin_size);
-        shaderProgramInit(&program);
-        shaderProgramSetVsh(&program, &vshader_dvlb->DVLE[0]);
-    }
+        if (!vshader_dvlb) {
+            vshader_dvlb =
+                DVLB_ParseFile((u32 *)vshader_shbin, vshader_shbin_size);
+            shaderProgramInit(&program);
+            shaderProgramSetVsh(&program, &vshader_dvlb->DVLE[0]);
+        }
 
-    shaderProgramUse(&program);
+        shaderProgramUse(&program);
 
-    C(GPUREG_VSH_NUM_ATTR, 1);
-    GPUCMD_AddMaskedWrite(GPUREG_VSH_INPUTBUFFER_CONFIG, 0xB,
-                          1 | (0xA0 << 24));
-    C(GPUREG_VSH_ATTRIBUTES_PERMUTATION_LOW, 0x00000010);
-    C(GPUREG_VSH_ATTRIBUTES_PERMUTATION_HIGH, 0);
+        C(GPUREG_VSH_NUM_ATTR, 1);
+        GPUCMD_AddMaskedWrite(GPUREG_VSH_INPUTBUFFER_CONFIG, 0xB,
+                              1 | (0xA0 << 24));
+        C(GPUREG_VSH_ATTRIBUTES_PERMUTATION_LOW, 0x00000010);
+        C(GPUREG_VSH_ATTRIBUTES_PERMUTATION_HIGH, 0);
 
-    C(GPUREG_FACECULLING_CONFIG, 0);
-    C(GPUREG_GEOSTAGE_CONFIG, 0);
-    GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 2, (1 << 8) | 1);
-    C(GPUREG_INDEXBUFFER_CONFIG, 0x80000000);
-    C(GPUREG_RESTART_PRIMITIVE, 1);
+        C(GPUREG_FACECULLING_CONFIG, 0);
+        C(GPUREG_GEOSTAGE_CONFIG, 0);
+        GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 2, (1 << 8) | 1);
+        C(GPUREG_INDEXBUFFER_CONFIG, 0x80000000);
+        C(GPUREG_RESTART_PRIMITIVE, 1);
 
-    GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 1);
-    GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 0);
-    C(GPUREG_FIXEDATTRIB_INDEX, 0xF);
+        GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 1);
+        GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 0);
+        C(GPUREG_FIXEDATTRIB_INDEX, 0xF);
 
-    union {
-        u32 packed[3];
-        struct {
-            u8 x[3], y[3], z[3], w[3];
-        };
-    } param;
+        union {
+            u32 packed[3];
+            struct {
+                u8 x[3], y[3], z[3], w[3];
+            };
+        } param;
 
 #define ATTR(X, Y, Z, W)                                                       \
     {                                                                          \
@@ -269,68 +297,71 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
                                     3);                                        \
     }
 
-    const float sw = image_width / ((float)MOON_CTR_VIDEO_TEX_W);
-    const float sh = image_height / ((float)MOON_CTR_VIDEO_TEX_H);
-    const float hh = 2.0f / surface_width;
+        const float sw = image_width / ((float)MOON_CTR_VIDEO_TEX_W);
+        const float sh = image_height / ((float)MOON_CTR_VIDEO_TEX_H);
+        const float hh = 2.0f / surface_width;
 
-    // PICA renders into a 240x400/800 rotated framebuffer. Logical horizontal
-    // screen scaling therefore maps to NDC Y, while logical vertical scaling
-    // maps to NDC X.
-    const float ndc_x = geometry.destination_scale_y;
-    const float ndc_y = geometry.destination_scale_x;
+        // PICA renders into a 240x400/800 rotated framebuffer. Logical
+        // horizontal screen scaling maps to NDC Y, while logical vertical
+        // scaling maps to NDC X.
+        const float ndc_x = geometry.destination_scale_y;
+        const float ndc_y = geometry.destination_scale_x;
 
-    // The existing texture path is horizontally and vertically flipped by the
-    // framebuffer/transfer orientation. Convert logical normalized crop UVs to
-    // the texture coordinates expected by the current shader.
-    const float tex_left = sw * (1.0f - geometry.source_u_min);
-    const float tex_right = sw * (1.0f - geometry.source_u_max);
-    const float tex_top = sh * (1.0f - geometry.source_v_min);
-    const float tex_bottom =
-        sh * (1.0f - geometry.source_v_max) - hh;
+        // Convert logical normalized crop UVs to the texture coordinates
+        // expected by the existing rotated/flipped texture path.
+        const float tex_left = sw * (1.0f - geometry.source_u_min);
+        const float tex_right = sw * (1.0f - geometry.source_u_max);
+        const float tex_top = sh * (1.0f - geometry.source_v_min);
+        const float tex_bottom =
+            sh * (1.0f - geometry.source_v_max) - hh;
 
-    ATTR(ndc_x, -ndc_y, 0.0, 0.0);
-    ATTR(tex_left, tex_bottom, 0.0, 0.0);
+        ATTR(ndc_x, -ndc_y, 0.0, 0.0);
+        ATTR(tex_left, tex_bottom, 0.0, 0.0);
 
-    ATTR(-ndc_x, -ndc_y, 0.0, 0.0);
-    ATTR(tex_left, tex_top, 0.0, 0.0);
+        ATTR(-ndc_x, -ndc_y, 0.0, 0.0);
+        ATTR(tex_left, tex_top, 0.0, 0.0);
 
-    ATTR(ndc_x, ndc_y, 0.0, 0.0);
-    ATTR(tex_right, tex_bottom, 0.0, 0.0);
+        ATTR(ndc_x, ndc_y, 0.0, 0.0);
+        ATTR(tex_right, tex_bottom, 0.0, 0.0);
 
-    ATTR(-ndc_x, ndc_y, 0.0, 0.0);
-    ATTR(tex_right, tex_top, 0.0, 0.0);
+        ATTR(-ndc_x, ndc_y, 0.0, 0.0);
+        ATTR(tex_right, tex_top, 0.0, 0.0);
 
-    GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 1);
-    GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 0);
-    C(GPUREG_VTX_FUNC, 1);
+        GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 1);
+        GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 0);
+        C(GPUREG_VTX_FUNC, 1);
 
-    GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 0x8, 0x00000000);
-    C(GPUREG_FRAMEBUFFER_FLUSH, 1);
-    C(GPUREG_FRAMEBUFFER_INVALIDATE, 1);
+        GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 0x8, 0x00000000);
+        C(GPUREG_FRAMEBUFFER_FLUSH, 1);
+        C(GPUREG_FRAMEBUFFER_INVALIDATE, 1);
 
 #undef C
 #undef ATTR
 
+        u32 *unused = nullptr;
+        GPUCMD_Split(&unused, &cached_cmdlist_len);
+
+        // The command list is the only CPU-authored linear buffer consumed by
+        // P3D here. The old path flushed the entire linear heap every frame;
+        // flushing this exact range once per state rebuild is sufficient.
+        GSPGPU_FlushDataCache(cmdlist,
+                              cached_cmdlist_len * (u32)sizeof(u32));
+
+        cached_presentation_state = presentation;
+        command_list_valid = true;
+    }
+
+    // Allow CPU command-list construction to overlap the source->texture
+    // transfer on state-change frames. Cached frames get here immediately.
     gspWaitForEvent(GSPGPU_EVENT_PPF, 0);
 
-    u32 *unused;
-    u32 cmdlist_len;
-    GPUCMD_Split(&unused, &cmdlist_len);
-    GSPGPU_FlushDataCache(cmdlist, cmdlist_len);
-
-    extern u32 __ctru_linear_heap;
-    extern u32 __ctru_linear_heap_size;
-    GX_FlushCacheRegions(cmdlist, cmdlist_len * 4, (u32 *)__ctru_linear_heap,
-                         __ctru_linear_heap_size, NULL, 0);
-
-    GX_ProcessCommandList(cmdlist, cmdlist_len * 4, 2);
-
+    GX_ProcessCommandList(cmdlist, cached_cmdlist_len * 4, 2);
     gspWaitForEvent(GSPGPU_EVENT_P3D, 0);
 
     if ((screen == GFX_TOP) && gfxIs3D()) {
         u32 *dest_left =
             (u32 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
-        auto surface_width_3d = surface_width / 2;
+        const auto surface_width_3d = surface_width / 2;
         GX_DisplayTransfer(
             (u32 *)vramFb, GX_BUFFER_DIM(surface_height, surface_width_3d),
             dest_left, GX_BUFFER_DIM(surface_height, surface_width_3d),
@@ -341,7 +372,7 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
 
         u32 *dest_right =
             (u32 *)gfxGetFramebuffer(GFX_TOP, GFX_RIGHT, NULL, NULL);
-        auto surface_offset_3d =
+        const auto surface_offset_3d =
             surface_height * surface_width * px_size / (sizeof(u32) * 2);
         GX_DisplayTransfer((u32 *)vramFb + surface_offset_3d,
                            GX_BUFFER_DIM(surface_height, surface_width_3d),
