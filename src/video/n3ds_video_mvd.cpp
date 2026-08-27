@@ -19,6 +19,7 @@
 
 #include "video.hpp"
 #include "../stream_telemetry.hpp"
+#include "../stream_telemetry_store.hpp"
 
 #include <3ds.h>
 
@@ -49,7 +50,6 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
         throw std::runtime_error("Unsupported hardware");
     }
 
-    // Calculate required buffer size
     MVDSTD_CalculateWorkBufSizeConfig config = {
         0,
     };
@@ -69,7 +69,7 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
 
     first_frame = true;
     last_present_ticks = 0;
-    global_stream_telemetry().reset();
+    reset_global_stream_telemetry();
     status = mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264,
                         MVD_OUTPUT_BGR565, size, NULL);
     if (status) {
@@ -96,15 +96,12 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
                                 image_height, NULL, (u32 *)rgb_img_buffer,
                                 NULL);
 
-    // Place within the 1024x512 buffer
     mvdstd_config.flag_x104 = 1;
     mvdstd_config.output_width_override = MOON_CTR_VIDEO_TEX_W;
     mvdstd_config.output_height_override = MOON_CTR_VIDEO_TEX_H;
     MVDSTD_SetConfig(&mvdstd_config);
 }
 
-// This function must be called after
-// decoding is finished
 MvdDecoder::~MvdDecoder() {
     y2rExit();
     mvdstdExit();
@@ -113,8 +110,6 @@ MvdDecoder::~MvdDecoder() {
     printf("Video decoder shutdown successfully\n");
 }
 
-// packets must be decoded in order
-// indata must be inlen + AV_INPUT_BUFFER_PADDING_SIZE in length
 DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
     int ret = mvdstdProcessVideoFrame(indata, inlen, 1, NULL);
     if (!MVD_CHECKNALUPROC_SUCCESS(ret)) {
@@ -169,10 +164,9 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
             sample.fps = 1000.0f / sample.frame_ms;
         }
     }
-    global_stream_telemetry().push(sample);
+    push_global_stream_telemetry(sample);
     last_present_ticks = present_ticks;
 
-    // If MVD never gets an IDR frame, everything shows up gray
     if (first_frame) {
         first_frame = false;
         return DR_NEED_IDR;
