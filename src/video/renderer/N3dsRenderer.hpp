@@ -21,22 +21,13 @@
 #include "../../presentation_state.hpp"
 #include "../../system/AtomicVar.hpp"
 #include "../../system/subscriber.hpp"
+#include "../video_layout.hpp"
 #include <3ds.h>
 #include <Limelight.h>
 #include <memory>
 
-#define MOON_CTR_VIDEO_TEX_W 1024
-#define MOON_CTR_VIDEO_TEX_H 512
 #define MOON_CTR_VIDEO_TEX_H_OFFSET 32
 #define CMDLIST_SZ 0x800
-
-inline int moon_video_texture_width(int image_width) {
-    return image_width <= 512 ? 512 : MOON_CTR_VIDEO_TEX_W;
-}
-
-inline int moon_video_texture_height(int image_height) {
-    return image_height <= 256 ? 256 : MOON_CTR_VIDEO_TEX_H;
-}
 
 class IN3dsRenderer {
   public:
