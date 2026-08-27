@@ -20,6 +20,7 @@
 #include "../../system/dispatcher.hpp"
 #include "N3dsRenderer.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <stdbool.h>
