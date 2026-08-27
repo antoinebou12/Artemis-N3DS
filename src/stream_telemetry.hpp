@@ -38,3 +38,5 @@ class StreamTelemetry {
     std::size_t next_index_ = 0;
     std::size_t count_ = 0;
 };
+
+StreamTelemetry &global_stream_telemetry();
