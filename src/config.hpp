@@ -40,6 +40,7 @@ typedef struct _CONFIGURATION {
     char *platform;
     char *audio_device;
     char *config_file;
+    char *profile;
     char key_dir[4096];
     bool sops;
     bool localaudio;
@@ -58,7 +59,7 @@ typedef struct _CONFIGURATION {
     bool use_triggers_for_mouse;
 } CONFIGURATION, *PCONFIGURATION;
 
-bool config_file_parse(char *filename, PCONFIGURATION config);
+bool config_file_parse(PCONFIGURATION config);
 void config_parse(int argc, char *argv[], PCONFIGURATION config);
 void parse_argument(int c, char *value, PCONFIGURATION config);
 void config_save(char *filename, PCONFIGURATION config);
