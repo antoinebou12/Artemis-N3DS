@@ -42,3 +42,8 @@ StreamTelemetrySummary StreamTelemetry::summary() const {
 }
 
 std::size_t StreamTelemetry::size() const { return count_; }
+
+StreamTelemetry &global_stream_telemetry() {
+    static StreamTelemetry telemetry;
+    return telemetry;
+}
