@@ -3,15 +3,17 @@
 #include <cstring>
 
 namespace {
-constexpr std::array<StreamProfilePreset, 4> kProfiles = {{
-    {"Low Latency", 400, 240, 60, 1000},
-    {"Balanced", 800, 480, 30, 1500},
-    {"Quality", 800, 480, 60, 3000},
-    {"Desktop", 800, 480, 60, 4000},
+constexpr std::array<StreamProfilePreset, 5> kProfiles = {{
+    {"Low Latency", 400, 240, 60, 1000, PresentationMode::Stretch},
+    {"Balanced", 800, 480, 30, 1500, PresentationMode::Stretch},
+    {"Quality", 800, 480, 60, 3000, PresentationMode::Stretch},
+    {"Desktop", 800, 480, 60, 4000, PresentationMode::Stretch},
+    {"Stereo SBS", 800, 240, 60, 2500,
+     PresentationMode::StereoSideBySide},
 }};
 }
 
-const std::array<StreamProfilePreset, 4> &stream_profile_presets() {
+const std::array<StreamProfilePreset, 5> &stream_profile_presets() {
     return kProfiles;
 }
 
@@ -38,4 +40,11 @@ void apply_stream_profile(PCONFIGURATION config,
     config->stream.height = profile.height;
     config->stream.fps = profile.fps;
     config->stream.bitrate = profile.bitrate_kbps;
+
+    PresentationState presentation = global_presentation_state();
+    presentation.mode = profile.presentation_mode;
+    presentation.zoom = 1.0f;
+    presentation.pan_x = 0.0f;
+    presentation.pan_y = 0.0f;
+    set_global_presentation_state(presentation);
 }
