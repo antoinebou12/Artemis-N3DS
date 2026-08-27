@@ -41,6 +41,7 @@ enum class N3dsTouchType {
     DS_TOUCH,
     MAGNIFY_TOUCH,
     MENU_TOUCH,
+    PERFORMANCE_TOUCH,
     DEBUG_TOUCH,
 };
 class TouchStateChangedMsg : public IMessage {
