@@ -39,12 +39,17 @@ bool same_presentation_state(const PresentationState &a,
 N3dsRendererBase::N3dsRendererBase(gfxScreen_t screen_in, int surface_width_in,
                                    int surface_height_in, int image_width_in,
                                    int image_height_in, int pixel_size,
-                                   bool debug_in)
+                                   bool debug_in, int texture_width_override,
+                                   int texture_height_override)
     : screen(screen_in), surface_width(surface_width_in),
       surface_height(surface_height_in), image_width(image_width_in),
       image_height(image_height_in),
-      texture_width(moon_video_texture_width(image_width_in)),
-      texture_height(moon_video_texture_height(image_height_in)),
+      texture_width(texture_width_override > 0
+                        ? texture_width_override
+                        : moon_video_texture_width(image_width_in)),
+      texture_height(texture_height_override > 0
+                         ? texture_height_override
+                         : moon_video_texture_height(image_height_in)),
       px_size(pixel_size), debug(debug_in) {
     cmdlist = (u32 *)linearAlloc(CMDLIST_SZ * 4);
     vramFb = vramAlloc(surface_width * surface_height * px_size);
@@ -145,8 +150,6 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         letterbox_initialized = false;
     }
 
-    // The decoder output uses the same adaptive power-of-two stride. This is
-    // 512x256 for 400x240, 1024x256 for 800x240 SBS, and 1024x512 for 800x480.
     GX_DisplayTransfer(
         (u32 *)source, GX_BUFFER_DIM(texture_width, texture_height),
         (u32 *)vramTex, GX_BUFFER_DIM(texture_width, texture_height),
@@ -178,7 +181,6 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         C(GPUREG_DEPTHBUFFER_WRITE, 0);
 
         C(GPUREG_VIEWPORT_XY, 0);
-
         C(GPUREG_VIEWPORT_WIDTH, f32tof24(surface_height / 2));
         C(GPUREG_VIEWPORT_INVW,
           f32tof31(2.0 / ((double)surface_height)) << 1);
@@ -199,8 +201,7 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         C(GPUREG_COLOR_OPERATION, 0x00E40000);
 
         C(GPUREG_TEXUNIT0_TYPE, GPU_RGB565);
-        C(GPUREG_TEXUNIT0_DIM,
-          texture_height | (texture_width << 16));
+        C(GPUREG_TEXUNIT0_DIM, texture_height | (texture_width << 16));
         C(GPUREG_TEXUNIT0_ADDR1, osConvertVirtToPhys(vramTex) >> 3);
         const u32 texture_filter =
             presentation.linear_filtering ? GPU_LINEAR : GPU_NEAREST;
@@ -252,7 +253,6 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
             shaderProgramInit(&program);
             shaderProgramSetVsh(&program, &vshader_dvlb->DVLE[0]);
         }
-
         shaderProgramUse(&program);
 
         C(GPUREG_VSH_NUM_ATTR, 1);
@@ -284,7 +284,6 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         write24(param.y, f32tof24(Y));                                         \
         write24(param.z, f32tof24(Z));                                         \
         write24(param.w, f32tof24(W));                                         \
-                                                                               \
         u32 p = param.packed[0];                                               \
         param.packed[0] = param.packed[2];                                     \
         param.packed[2] = p;                                                   \
@@ -295,10 +294,8 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         const float sw = image_width / ((float)texture_width);
         const float sh = image_height / ((float)texture_height);
         const float hh = 2.0f / surface_width;
-
         const float ndc_x = geometry.destination_scale_y;
         const float ndc_y = geometry.destination_scale_x;
-
         const float tex_left = sw * (1.0f - geometry.source_u_min);
         const float tex_right = sw * (1.0f - geometry.source_u_max);
         const float tex_top = sh * (1.0f - geometry.source_v_min);
@@ -307,20 +304,16 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
 
         ATTR(ndc_x, -ndc_y, 0.0, 0.0);
         ATTR(tex_left, tex_bottom, 0.0, 0.0);
-
         ATTR(-ndc_x, -ndc_y, 0.0, 0.0);
         ATTR(tex_left, tex_top, 0.0, 0.0);
-
         ATTR(ndc_x, ndc_y, 0.0, 0.0);
         ATTR(tex_right, tex_bottom, 0.0, 0.0);
-
         ATTR(-ndc_x, ndc_y, 0.0, 0.0);
         ATTR(tex_right, tex_top, 0.0, 0.0);
 
         GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 1);
         GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 0);
         C(GPUREG_VTX_FUNC, 1);
-
         GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 0x8, 0x00000000);
         C(GPUREG_FRAMEBUFFER_FLUSH, 1);
         C(GPUREG_FRAMEBUFFER_INVALIDATE, 1);
