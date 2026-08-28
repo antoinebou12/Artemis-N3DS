@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "errors.h"
 #include "xml.h"
 
 #include <Limelight.h>
