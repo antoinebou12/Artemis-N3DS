@@ -53,6 +53,7 @@ class TouchHandlerBase {
 
   private:
     bool isActive = false;
+    touchPosition lastTouch{};
 };
 
 class DebugTouchHandler : public TouchHandlerBase {
