@@ -25,8 +25,9 @@ namespace {
 constexpr int kButtonHeight = 60;
 constexpr int kButtonWidth = 160;
 constexpr int kNavThreshold = 45;
-constexpr u64 kInitialRepeat = SYSCLOCK_ARM11 * 300 / 1000;
-constexpr u64 kRepeat = SYSCLOCK_ARM11 * 120 / 1000;
+constexpr u64 kInitialRepeat =
+    static_cast<u64>(SYSCLOCK_ARM11) * 300 / 1000;
+constexpr u64 kRepeat = static_cast<u64>(SYSCLOCK_ARM11) * 120 / 1000;
 
 const char *kButtonLabels[4][2] = {
     {"GAMEPAD", "MOUSEPAD"},
@@ -44,7 +45,7 @@ N3dsTouchType kButtonTypes[4][2] = {
 
 void print_tile(const char *label, bool selected, bool pressed) {
     if (pressed) {
-        std::printf("[% -14s]", label);
+        std::printf("[%-14s]", label);
     } else if (selected) {
         std::printf(">%-14s<", label);
     } else {
