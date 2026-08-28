@@ -1,13 +1,19 @@
 #include "n3ds_ui.hpp"
 
+#include "system/pair_record.hpp"
+
 #include <3ds.h>
 #include <citro2d.h>
 #include <citro3d.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <string>
+#include <sys/stat.h>
+#include <vector>
 
 namespace {
 bool g_active = false;
@@ -27,7 +33,6 @@ constexpr u32 kMuted = C2D_Color32(155, 166, 179, 255);
 constexpr u32 kDisabled = C2D_Color32(84, 92, 104, 255);
 constexpr u32 kDarkText = C2D_Color32(10, 22, 34, 255);
 
-constexpr int kTopVisibleRows = 5;
 constexpr int kTouchVisibleRows = 4;
 constexpr float kTouchRowsY = 59.0f;
 constexpr float kTouchRowHeight = 28.0f;
@@ -37,6 +42,11 @@ constexpr float kTouchRowsBottom =
 constexpr float kActionBarY = 188.0f;
 constexpr float kActionBarHeight = 42.0f;
 constexpr std::size_t kMaxDrawTextBytes = 384;
+constexpr int kAnalogThreshold = 45;
+constexpr u64 kAnalogInitialRepeatTicks = SYSCLOCK_ARM11 * 300 / 1000;
+constexpr u64 kAnalogRepeatTicks = SYSCLOCK_ARM11 * 115 / 1000;
+constexpr int kDetailsVisibleLines = 6;
+constexpr std::size_t kDetailsWrapChars = 55;
 
 struct TouchMenuState {
     bool active = false;
@@ -48,6 +58,23 @@ struct TouchMenuState {
     int last_x = 0;
     int last_y = 0;
     int action_column = -1;
+};
+
+struct AnalogNavState {
+    int x_dir = 0;
+    int y_dir = 0;
+    u64 next_x_repeat = 0;
+    u64 next_y_repeat = 0;
+};
+
+struct DetailsTouchState {
+    bool active = false;
+    bool moved = false;
+    int start_y = 0;
+    int last_x = 0;
+    int last_y = 0;
+    int start_offset = 0;
+    int action = -1;
 };
 
 std::string bounded_text(const std::string &value) {
@@ -64,6 +91,20 @@ std::string ellipsize(const std::string &value, std::size_t max_chars) {
         return value;
     }
     return value.substr(0, max_chars - 3) + "...";
+}
+
+std::string trim_copy(const std::string &value) {
+    std::size_t first = 0;
+    while (first < value.size() &&
+           std::isspace(static_cast<unsigned char>(value[first])) != 0) {
+        ++first;
+    }
+    std::size_t last = value.size();
+    while (last > first &&
+           std::isspace(static_cast<unsigned char>(value[last - 1])) != 0) {
+        --last;
+    }
+    return value.substr(first, last - first);
 }
 
 void draw_text(const std::string &value, float x, float y, float scale,
@@ -106,9 +147,6 @@ u32 item_accent(const std::string &item) {
         item.find("On") != std::string::npos) {
         return kSuccess;
     }
-    if (item.rfind("Found", 0) == 0) {
-        return kAccent;
-    }
     return kAccent;
 }
 
@@ -127,44 +165,49 @@ void draw_header(const std::string &title, const std::string &subtitle) {
     C2D_DrawRectSolid(18.0f, 72.0f, 0.4f, 364.0f, 2.0f, kAccent);
 }
 
-void draw_top_overview(const std::vector<std::string> &items, int selected) {
+void draw_context_preview(const char *label, const std::string &value, float x,
+                          float width) {
+    C2D_DrawRectSolid(x, 184.0f, 0.3f, width, 39.0f, kSurface);
+    draw_text(label, x + 10.0f, 190.0f, 0.25f, kMuted);
+    draw_text(ellipsize(value, 25), x + 10.0f, 204.0f, 0.32f, kText);
+}
+
+void draw_top_context(const std::vector<std::string> &items, int selected) {
     if (items.empty()) {
         C2D_DrawRectSolid(18.0f, 88.0f, 0.3f, 364.0f, 104.0f, kSurface);
         draw_pill("EMPTY", 32.0f, 101.0f, 56.0f, kAccentSoft, kAccent);
         draw_text("Nothing here yet", 32.0f, 130.0f, 0.56f, kText);
-        draw_text("Refresh the network or add a host manually from the touch screen.",
+        draw_text("Use the bottom touch screen to refresh or add a host.",
                   32.0f, 160.0f, 0.36f, kMuted, 330.0f);
         return;
     }
 
     const int safe_selected =
         std::clamp(selected, 0, static_cast<int>(items.size()) - 1);
-    const int first = visible_window_start(
-        static_cast<int>(items.size()), safe_selected, kTopVisibleRows);
+    const u32 accent = item_accent(items[safe_selected]);
 
-    for (int row = 0; row < kTopVisibleRows; ++row) {
-        const int item_index = first + row;
-        if (item_index >= static_cast<int>(items.size())) {
-            break;
-        }
-
-        const float y = 84.0f + row * 29.0f;
-        const bool is_selected = item_index == safe_selected;
-        const u32 accent = item_accent(items[item_index]);
-        C2D_DrawRectSolid(18.0f, y, 0.3f, 364.0f, 25.0f,
-                          is_selected ? kSurfaceSelected : kSurface);
-        if (is_selected) {
-            C2D_DrawRectSolid(18.0f, y, 0.45f, 4.0f, 25.0f, accent);
-            C2D_DrawRectSolid(361.0f, y + 8.0f, 0.45f, 9.0f, 9.0f, accent);
-        }
-        draw_text(ellipsize(items[item_index], 60), 30.0f, y + 4.0f, 0.40f,
-                  is_selected ? kText : kMuted);
-    }
+    C2D_DrawRectSolid(18.0f, 87.0f, 0.3f, 364.0f, 84.0f, kSurfaceSelected);
+    C2D_DrawRectSolid(18.0f, 87.0f, 0.45f, 5.0f, 84.0f, accent);
+    draw_pill("SELECTED", 33.0f, 99.0f, 76.0f, kAccentSoft, kAccent);
 
     char counter[48];
     std::snprintf(counter, sizeof(counter), "%d / %d", safe_selected + 1,
                   static_cast<int>(items.size()));
-    draw_pill(counter, 326.0f, 216.0f, 56.0f, kSurfaceRaised, kMuted);
+    draw_pill(counter, 314.0f, 99.0f, 54.0f, kSurfaceRaised, kMuted);
+
+    draw_text(ellipsize(items[safe_selected], 92), 33.0f, 128.0f, 0.50f,
+              kText, 324.0f);
+    draw_text("Top: context   Bottom: navigation", 33.0f, 157.0f, 0.28f,
+              kMuted);
+
+    const std::string previous =
+        safe_selected > 0 ? items[safe_selected - 1] : "Start of list";
+    const std::string next =
+        safe_selected + 1 < static_cast<int>(items.size())
+            ? items[safe_selected + 1]
+            : "End of list";
+    draw_context_preview("PREVIOUS", previous, 18.0f, 177.0f);
+    draw_context_preview("NEXT", next, 205.0f, 177.0f);
 }
 
 void draw_action_button(float x, float width, const char *key,
@@ -198,9 +241,10 @@ void draw_bottom_touch_menu(const std::string &title,
                             int selected,
                             const std::string &secondary_label,
                             bool allow_refresh) {
-    draw_text(ellipsize(title, 28), 10.0f, 8.0f, 0.48f, kText);
-    draw_text("Touch", 258.0f, 10.0f, 0.31f, kAccent);
-    draw_text("tap to open  |  drag to scroll", 10.0f, 34.0f, 0.29f, kMuted);
+    draw_text(ellipsize(title, 25), 10.0f, 8.0f, 0.48f, kText);
+    draw_pill("TOUCH", 252.0f, 8.0f, 58.0f, kAccentSoft, kAccent);
+    draw_text("tap to open | drag / Circle Pad to move", 10.0f, 34.0f, 0.28f,
+              kMuted);
 
     if (!items.empty()) {
         const int safe_selected =
@@ -263,7 +307,7 @@ void draw_menu_frame(const std::string &title, const std::string &subtitle,
 
     C2D_SceneBegin(g_top);
     draw_header(title, subtitle);
-    draw_top_overview(items, selected);
+    draw_top_context(items, selected);
 
     C2D_SceneBegin(g_bottom);
     draw_bottom_touch_menu(title, items, selected, secondary_label,
@@ -342,6 +386,225 @@ bool action_from_column(int column, bool has_items, bool has_secondary,
         break;
     }
     return false;
+}
+
+int strongest_axis(int primary, int secondary) {
+    return std::abs(primary) >= std::abs(secondary) ? primary : secondary;
+}
+
+int axis_direction(int value) {
+    if (value >= kAnalogThreshold) {
+        return 1;
+    }
+    if (value <= -kAnalogThreshold) {
+        return -1;
+    }
+    return 0;
+}
+
+bool repeat_axis(int direction, int &last_direction, u64 &next_repeat,
+                 u64 now) {
+    if (direction == 0) {
+        last_direction = 0;
+        next_repeat = 0;
+        return false;
+    }
+    if (direction != last_direction) {
+        last_direction = direction;
+        next_repeat = now + kAnalogInitialRepeatTicks;
+        return true;
+    }
+    if (next_repeat != 0 && now >= next_repeat) {
+        next_repeat = now + kAnalogRepeatTicks;
+        return true;
+    }
+    return false;
+}
+
+void analog_navigation(AnalogNavState &state, int &x_step, int &y_step) {
+    circlePosition cpad{};
+    circlePosition cstick{};
+    hidCircleRead(&cpad);
+    hidCstickRead(&cstick);
+
+    const int x_dir =
+        axis_direction(strongest_axis(cpad.dx, cstick.dx));
+    const int y_dir =
+        axis_direction(strongest_axis(cpad.dy, cstick.dy));
+    const u64 now = svcGetSystemTick();
+
+    x_step = repeat_axis(x_dir, state.x_dir, state.next_x_repeat, now) ? x_dir
+                                                                       : 0;
+    y_step = repeat_axis(y_dir, state.y_dir, state.next_y_repeat, now) ? y_dir
+                                                                       : 0;
+}
+
+std::vector<std::string> wrap_details_text(const std::string &text) {
+    std::vector<std::string> lines;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t newline = text.find('\n', start);
+        std::string paragraph =
+            text.substr(start, newline == std::string::npos
+                                   ? std::string::npos
+                                   : newline - start);
+
+        if (paragraph.empty()) {
+            lines.emplace_back("");
+        } else {
+            while (paragraph.size() > kDetailsWrapChars) {
+                std::size_t split = paragraph.rfind(' ', kDetailsWrapChars);
+                if (split == std::string::npos || split == 0) {
+                    split = kDetailsWrapChars;
+                }
+                lines.push_back(trim_copy(paragraph.substr(0, split)));
+                paragraph = trim_copy(paragraph.substr(split));
+            }
+            if (!paragraph.empty()) {
+                lines.push_back(paragraph);
+            }
+        }
+
+        if (newline == std::string::npos) {
+            break;
+        }
+        start = newline + 1;
+    }
+
+    if (lines.empty()) {
+        lines.emplace_back("");
+    }
+    return lines;
+}
+
+bool save_diagnostic(const std::string &title, const std::string &message,
+                     std::string &path) {
+    const char *directory = MOONLIGHT_3DS_PATH "/diagnostics";
+    mkdir(MOONLIGHT_3DS_PATH, 0777);
+    mkdir(directory, 0777);
+
+    char output[128] = {0};
+    std::snprintf(output, sizeof(output), "%s/diagnostic_%ld.txt", directory,
+                  static_cast<long>(std::time(nullptr)));
+    FILE *fd = std::fopen(output, "w");
+    if (fd == nullptr) {
+        path = "Unable to write diagnostic";
+        return false;
+    }
+
+    std::fprintf(fd, "Artemis 3DS diagnostic\n\n%s\n\n%s\n", title.c_str(),
+                 message.c_str());
+    std::fclose(fd);
+    path = output;
+    return true;
+}
+
+void draw_details_button(float x, float width, const char *key,
+                         const std::string &label, bool enabled, bool primary) {
+    const u32 background =
+        !enabled ? kSurface : (primary ? kAccent : kSurfaceRaised);
+    const u32 foreground = !enabled ? kDisabled : (primary ? kDarkText : kText);
+    C2D_DrawRectSolid(x, 181.0f, 0.3f, width, 48.0f, background);
+    draw_pill(key, x + 7.0f, 188.0f, 24.0f,
+              primary && enabled ? C2D_Color32(174, 221, 255, 255)
+                                 : kSurfaceSelected,
+              primary && enabled ? kDarkText : foreground);
+    draw_text(ellipsize(label, 10), x + 38.0f, 196.0f, 0.33f, foreground);
+}
+
+void draw_details_frame(const std::string &title, const std::string &subtitle,
+                        const std::vector<std::string> &lines, int offset,
+                        bool allow_retry, const std::string &retry_label,
+                        const std::string &status) {
+    begin_frame();
+
+    C2D_SceneBegin(g_top);
+    draw_header(title, subtitle.empty() ? "Scrollable details" : subtitle);
+    C2D_DrawRectSolid(18.0f, 86.0f, 0.3f, 364.0f, 140.0f, kSurface);
+    C2D_DrawRectSolid(18.0f, 86.0f, 0.45f, 4.0f, 140.0f, kAccent);
+
+    const int max_offset =
+        std::max(0, static_cast<int>(lines.size()) - kDetailsVisibleLines);
+    const int safe_offset = std::clamp(offset, 0, max_offset);
+    float y = 96.0f;
+    for (int i = 0; i < kDetailsVisibleLines; ++i) {
+        const int line_index = safe_offset + i;
+        if (line_index >= static_cast<int>(lines.size())) {
+            break;
+        }
+        draw_text(ellipsize(lines[line_index], 58), 31.0f, y, 0.36f,
+                  lines[line_index].empty() ? kMuted : kText);
+        y += 20.0f;
+    }
+
+    if (lines.size() > kDetailsVisibleLines) {
+        const float track_y = 94.0f;
+        const float track_h = 122.0f;
+        C2D_DrawRectSolid(371.0f, track_y, 0.5f, 3.0f, track_h,
+                          kSurfaceRaised);
+        const float thumb_h = std::max(
+            18.0f, track_h * kDetailsVisibleLines /
+                       static_cast<float>(lines.size()));
+        const float ratio = max_offset > 0
+                                ? static_cast<float>(safe_offset) / max_offset
+                                : 0.0f;
+        C2D_DrawRectSolid(371.0f, track_y + ratio * (track_h - thumb_h), 0.55f,
+                          3.0f, thumb_h, kAccent);
+    }
+
+    C2D_SceneBegin(g_bottom);
+    draw_text("Details & diagnostics", 12.0f, 10.0f, 0.48f, kText);
+    draw_pill("SCROLL", 247.0f, 8.0f, 63.0f, kAccentSoft, kAccent);
+    draw_text("Swipe vertically or use Circle Pad / C-Stick", 12.0f, 39.0f,
+              0.29f, kMuted);
+
+    char position[64];
+    const int first_line = lines.empty() ? 0 : safe_offset + 1;
+    const int last_line = std::min(static_cast<int>(lines.size()),
+                                   safe_offset + kDetailsVisibleLines);
+    std::snprintf(position, sizeof(position), "Lines %d-%d of %d", first_line,
+                  last_line, static_cast<int>(lines.size()));
+    draw_pill(position, 12.0f, 67.0f, 112.0f, kSurfaceRaised, kMuted);
+
+    if (!status.empty()) {
+        draw_text(ellipsize(status, 48), 12.0f, 96.0f, 0.31f, kSuccess);
+    } else {
+        draw_text("X saves this diagnostic to the SD card", 12.0f, 96.0f,
+                  0.31f, kMuted);
+    }
+
+    C2D_DrawRectSolid(12.0f, 130.0f, 0.3f, 296.0f, 3.0f, kSurfaceRaised);
+    if (lines.size() > kDetailsVisibleLines) {
+        const float max_offset_f = static_cast<float>(std::max(1, max_offset));
+        const float width = 70.0f;
+        const float travel = 296.0f - width;
+        C2D_DrawRectSolid(12.0f + travel * safe_offset / max_offset_f, 130.0f,
+                          0.4f, width, 3.0f, kAccent);
+    } else {
+        C2D_DrawRectSolid(12.0f, 130.0f, 0.4f, 296.0f, 3.0f, kAccent);
+    }
+
+    draw_details_button(6.0f, 96.0f, "B", "Back", true, false);
+    draw_details_button(112.0f, 96.0f, "X", "Save", true, false);
+    draw_details_button(218.0f, 96.0f, "A", retry_label, allow_retry, true);
+
+    end_frame();
+}
+
+int details_action_at(const touchPosition &touch) {
+    if (touch.py < 177) {
+        return -1;
+    }
+    if (touch.px < 106) {
+        return 0;
+    }
+    if (touch.px >= 108 && touch.px < 212) {
+        return 1;
+    }
+    if (touch.px >= 214) {
+        return 2;
+    }
+    return -1;
 }
 } // namespace
 
@@ -425,6 +688,7 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                        : std::clamp(selected_index, 0,
                                     static_cast<int>(items.size()) - 1);
     TouchMenuState touch_state{};
+    AnalogNavState analog_state{};
     bool dirty = true;
 
     while (aptMainLoop()) {
@@ -441,27 +705,31 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
         const u32 up = hidKeysUp();
         const int previous_selected = selected;
 
+        int analog_x = 0;
+        int analog_y = 0;
+        analog_navigation(analog_state, analog_x, analog_y);
+
         if (!items.empty()) {
-            if (down & KEY_DUP) {
+            if ((down & KEY_DUP) || analog_y > 0) {
                 selected = std::max(0, selected - 1);
             }
-            if (down & KEY_DDOWN) {
+            if ((down & KEY_DDOWN) || analog_y < 0) {
                 selected = std::min(static_cast<int>(items.size()) - 1,
                                     selected + 1);
             }
-            if (down & KEY_DLEFT) {
+            if ((down & KEY_DLEFT) || analog_x < 0) {
                 selected = std::max(0, selected - kTouchVisibleRows);
             }
-            if (down & KEY_DRIGHT) {
+            if ((down & KEY_DRIGHT) || analog_x > 0) {
                 selected = std::min(static_cast<int>(items.size()) - 1,
                                     selected + kTouchVisibleRows);
             }
             if (down & KEY_L) {
-                selected = std::max(0, selected - kTopVisibleRows);
+                selected = std::max(0, selected - kTouchVisibleRows);
             }
             if (down & KEY_R) {
                 selected = std::min(static_cast<int>(items.size()) - 1,
-                                    selected + kTopVisibleRows);
+                                    selected + kTouchVisibleRows);
             }
         }
 
@@ -580,43 +848,134 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
     return result;
 }
 
-void n3ds_ui_message(const std::string &title, const std::string &message,
-                     const std::string &hint) {
+UiDetailsAction n3ds_ui_details(const std::string &title,
+                               const std::string &message,
+                               const std::string &subtitle,
+                               bool allow_retry,
+                               const std::string &retry_label) {
     if (!g_active) {
-        return;
+        return UiDetailsAction::Back;
     }
 
-    begin_frame();
-    C2D_SceneBegin(g_top);
-    draw_header(title, "");
-    C2D_DrawRectSolid(18.0f, 88.0f, 0.3f, 364.0f, 112.0f, kSurface);
-    draw_text(message, 32.0f, 102.0f, 0.42f, kText, 336.0f);
-
-    C2D_SceneBegin(g_bottom);
-    draw_text("Artemis 3DS", 14.0f, 12.0f, 0.50f, kText);
-    draw_pill("NOTICE", 14.0f, 43.0f, 64.0f, kAccentSoft, kAccent);
-    draw_text(hint, 14.0f, 78.0f, 0.38f, kMuted, 290.0f);
-    C2D_DrawRectSolid(22.0f, 178.0f, 0.3f, 276.0f, 48.0f, kAccent);
-    draw_pill("B", 34.0f, 188.0f, 24.0f,
-              C2D_Color32(174, 221, 255, 255), kDarkText);
-    draw_text("Back", 132.0f, 192.0f, 0.42f, kDarkText);
-    end_frame();
+    const std::vector<std::string> lines = wrap_details_text(message);
+    const int max_offset =
+        std::max(0, static_cast<int>(lines.size()) - kDetailsVisibleLines);
+    int offset = 0;
+    bool dirty = true;
+    std::string status;
+    AnalogNavState analog_state{};
+    DetailsTouchState touch_state{};
 
     while (aptMainLoop()) {
+        if (dirty) {
+            draw_details_frame(title, subtitle, lines, offset, allow_retry,
+                               retry_label, status);
+            dirty = false;
+        }
+
         gspWaitForVBlank();
         hidScanInput();
         const u32 down = hidKeysDown();
-        if (down & (KEY_A | KEY_B | KEY_START)) {
-            return;
+        const u32 held = hidKeysHeld();
+        const u32 up = hidKeysUp();
+
+        int analog_x = 0;
+        int analog_y = 0;
+        analog_navigation(analog_state, analog_x, analog_y);
+        const int previous_offset = offset;
+
+        if ((down & KEY_DUP) || analog_y > 0) {
+            offset = std::max(0, offset - 1);
         }
+        if ((down & KEY_DDOWN) || analog_y < 0) {
+            offset = std::min(max_offset, offset + 1);
+        }
+        if ((down & KEY_DLEFT) || (down & KEY_L) || analog_x < 0) {
+            offset = std::max(0, offset - kDetailsVisibleLines);
+        }
+        if ((down & KEY_DRIGHT) || (down & KEY_R) || analog_x > 0) {
+            offset = std::min(max_offset, offset + kDetailsVisibleLines);
+        }
+        if (offset != previous_offset) {
+            dirty = true;
+        }
+
+        if (down & KEY_B) {
+            return UiDetailsAction::Back;
+        }
+        if ((down & KEY_A) && allow_retry) {
+            return UiDetailsAction::Retry;
+        }
+        if (down & KEY_X) {
+            std::string path;
+            const bool saved = save_diagnostic(title, message, path);
+            status = saved ? "Saved: " + path : path;
+            dirty = true;
+        }
+
         if (down & KEY_TOUCH) {
             touchPosition touch{};
             hidTouchRead(&touch);
-            if (touch.py >= 174) {
-                return;
+            touch_state.active = true;
+            touch_state.moved = false;
+            touch_state.start_y = touch.py;
+            touch_state.last_x = touch.px;
+            touch_state.last_y = touch.py;
+            touch_state.start_offset = offset;
+            touch_state.action = details_action_at(touch);
+        }
+
+        if (touch_state.active && (held & KEY_TOUCH)) {
+            touchPosition touch{};
+            hidTouchRead(&touch);
+            touch_state.last_x = touch.px;
+            touch_state.last_y = touch.py;
+            const int delta_y = touch_state.start_y - touch.py;
+            if (std::abs(delta_y) >= 10) {
+                touch_state.moved = true;
+            }
+            if (touch_state.action < 0 && std::abs(delta_y) >= 10) {
+                const int next_offset = std::clamp(
+                    touch_state.start_offset + delta_y / 18, 0, max_offset);
+                if (next_offset != offset) {
+                    offset = next_offset;
+                    dirty = true;
+                }
             }
         }
+
+        if (touch_state.active && (up & KEY_TOUCH)) {
+            touchPosition release{};
+            release.px = touch_state.last_x;
+            release.py = touch_state.last_y;
+            if (!touch_state.moved) {
+                const int release_action = details_action_at(release);
+                if (release_action == touch_state.action) {
+                    if (release_action == 0) {
+                        return UiDetailsAction::Back;
+                    }
+                    if (release_action == 1) {
+                        std::string path;
+                        const bool saved =
+                            save_diagnostic(title, message, path);
+                        status = saved ? "Saved: " + path : path;
+                        dirty = true;
+                    }
+                    if (release_action == 2 && allow_retry) {
+                        return UiDetailsAction::Retry;
+                    }
+                }
+            }
+            touch_state = {};
+        }
     }
+
+    return UiDetailsAction::Back;
+}
+
+void n3ds_ui_message(const std::string &title, const std::string &message,
+                     const std::string &hint) {
+    (void)n3ds_ui_details(title, message, hint, false, "Retry");
 }
 
 void n3ds_ui_status(const std::string &title, const std::string &subtitle,
@@ -644,6 +1003,8 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     draw_text("Artemis 3DS", 14.0f, 12.0f, 0.50f, kText);
     draw_pill("WORKING", 14.0f, 43.0f, 72.0f, kAccentSoft, kAccent);
     draw_text(hint, 14.0f, 83.0f, 0.39f, kMuted, 290.0f);
+    draw_text("Top screen shows progress; controls stay on bottom.", 14.0f,
+              113.0f, 0.29f, kMuted, 290.0f);
     C2D_DrawRectSolid(14.0f, 140.0f, 0.3f, 292.0f, 3.0f, kSurfaceRaised);
     C2D_DrawRectSolid(14.0f, 140.0f, 0.4f, 92.0f, 3.0f, kAccent);
     end_frame();
