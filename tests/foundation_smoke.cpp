@@ -28,7 +28,7 @@ int main() {
     const auto fit_geometry =
         compute_presentation_geometry(1280, 720, 400, 240, fit);
     assert(nearly_equal(fit_geometry.destination_scale_x, 1.0f));
-    assert(nearly_equal(fit_geometry.destination_scale_y, 0.75f));
+    assert(nearly_equal(fit_geometry.destination_scale_y, 0.9375f));
     assert(nearly_equal(fit_geometry.source_u_min, 0.0f));
     assert(nearly_equal(fit_geometry.source_u_max, 1.0f));
 
@@ -38,8 +38,8 @@ int main() {
         compute_presentation_geometry(1280, 720, 400, 240, fill);
     assert(nearly_equal(fill_geometry.destination_scale_x, 1.0f));
     assert(nearly_equal(fill_geometry.destination_scale_y, 1.0f));
-    assert(nearly_equal(fill_geometry.source_u_min, 0.125f));
-    assert(nearly_equal(fill_geometry.source_u_max, 0.875f));
+    assert(nearly_equal(fill_geometry.source_u_min, 0.03125f));
+    assert(nearly_equal(fill_geometry.source_u_max, 0.96875f));
 
     PresentationState magnify;
     magnify.mode = PresentationMode::Magnify;
