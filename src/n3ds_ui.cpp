@@ -43,8 +43,10 @@ constexpr float kActionBarY = 188.0f;
 constexpr float kActionBarHeight = 42.0f;
 constexpr std::size_t kMaxDrawTextBytes = 384;
 constexpr int kAnalogThreshold = 45;
-constexpr u64 kAnalogInitialRepeatTicks = SYSCLOCK_ARM11 * 300 / 1000;
-constexpr u64 kAnalogRepeatTicks = SYSCLOCK_ARM11 * 115 / 1000;
+constexpr u64 kAnalogInitialRepeatTicks =
+    static_cast<u64>(SYSCLOCK_ARM11) * 300 / 1000;
+constexpr u64 kAnalogRepeatTicks =
+    static_cast<u64>(SYSCLOCK_ARM11) * 115 / 1000;
 constexpr int kDetailsVisibleLines = 6;
 constexpr std::size_t kDetailsWrapChars = 55;
 
