@@ -31,16 +31,29 @@ class N3dsConnectionListener : public ISubscriber {
 
     void accept(IMessage *msg) override;
 
+    // create_instance() keeps the historical raw-pointer API used by the main
+    // stream loop, while get_instance() returns shared ownership. Detached
+    // input/dispatcher workers therefore keep the listener alive until they
+    // have observed connection_closed and exited.
     static N3dsConnectionListener *create_instance(bool enable_motion) {
         if (instance == nullptr) {
-            instance = std::make_unique<N3dsConnectionListener>(enable_motion);
+            instance = std::make_shared<N3dsConnectionListener>(enable_motion);
         }
         return instance.get();
     }
-    static N3dsConnectionListener *get_instance() {
-        return instance != nullptr ? instance.get() : nullptr;
+
+    static std::shared_ptr<N3dsConnectionListener> get_instance() {
+        return instance;
     }
-    static void destroy_instance() { instance = nullptr; }
+
+    static void destroy_instance() {
+        if (instance != nullptr) {
+            // Wake every worker's loop condition before dropping the global
+            // reference. Worker-held shared_ptrs defer destruction safely.
+            instance->connection_closed.store(true);
+        }
+        instance.reset();
+    }
 
     void connection_terminated(int errorCode);
     void connection_log_message(const char *format, va_list arglist);
@@ -52,7 +65,7 @@ class N3dsConnectionListener : public ISubscriber {
     bool is_connection_closed();
 
   private:
-    static std::unique_ptr<N3dsConnectionListener> instance;
+    static std::shared_ptr<N3dsConnectionListener> instance;
     bool enable_motion;
     AtomicVar<bool> debug = false;
     AtomicVar<bool> connection_closed = false;
