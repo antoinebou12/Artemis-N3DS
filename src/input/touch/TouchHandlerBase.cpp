@@ -21,17 +21,27 @@
 #include "TouchHandler.hpp"
 
 void TouchHandlerBase::handle_touch_down(touchPosition touch) {
+    lastTouch = touch;
     isActive = true;
     _handle_touch_down(touch);
 }
 
 void TouchHandlerBase::handle_touch_up(touchPosition touch) {
+    (void)touch;
+    if (!isActive) {
+        return;
+    }
+
+    // HID coordinates are not guaranteed to remain meaningful once KEY_TOUCH
+    // transitions to up. Reuse the last coordinate observed while the finger
+    // was physically down so release actions target the same control reliably.
     isActive = false;
-    _handle_touch_up(touch);
+    _handle_touch_up(lastTouch);
 }
 
 void TouchHandlerBase::handle_touch_hold(touchPosition touch) {
     if (isActive) {
+        lastTouch = touch;
         _handle_touch_hold(touch);
     }
 }
