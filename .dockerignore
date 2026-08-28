@@ -1,1 +1,7 @@
 third_party\SDL\android-project-ant\src
+build/
+build-local/
+*.elf
+*.3dsx
+*.cia
+*.smdh

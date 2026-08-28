@@ -2,9 +2,20 @@
 
 Moonlight is an open source client for [Sunshine](https://github.com/LizardByte/Sunshine) and NVIDIA GameStream for the \*New\* Nintendo 3DS, forked from [Moonlight Embedded](https://github.com/moonlight-stream/moonlight-embedded). Moonlight allows you to stream your full collection of games and applications from your PC to other devices to play them remotely.
 
-## Original 3DS Note
+## 3DS model and resolution support
 
-While this app is operable on the original 3DS, the hardware decoder must be disabled and the framerate will be significantly lower due to the slower CPU.
+Moonlight supports the original Nintendo 3DS, Nintendo 3DS XL, New Nintendo
+3DS, and New Nintendo 3DS XL. The normal and XL consoles have the same screen
+pixel dimensions, so stream compatibility does not depend on physical screen
+size.
+
+- All models support stream inputs up to **1024x512**; the built-in choices are
+  400x240, 800x480, and 800x240 stereo side-by-side.
+- New 3DS and New 3DS XL use the hardware MVD decoder and are recommended for
+  800x480 streams and 60 FPS.
+- Original 3DS and 3DS XL automatically fall back to software decoding when
+  hardware decoding is selected. Start with 400x240 at 30 FPS for reliable
+  performance.
 
 ## First time setup/use
 

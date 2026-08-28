@@ -35,6 +35,8 @@ include $(DEVKITARM)/3ds_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	moonlight
 BUILD		:=	build
+HOST_CXX	?=	g++
+HOST_TEST_BINARY := $(BUILD)/foundation_smoke
 SOURCES		:=	src \
 				src/system/ \
 				src/audio/ \
@@ -199,7 +201,7 @@ ifneq ($(ROMFS),)
 	export _3DSXFLAGS += --romfs=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: all clean
+.PHONY: all clean test-host
 
 #---------------------------------------------------------------------------------
 MAKEROM      ?= makerom
@@ -233,6 +235,14 @@ all: $(BUILD) $(GFXBUILD) $(DEPSDIR) $(ROMFS_T3XFILES) $(T3XHFILES)
 	@$(BANNERTOOL) makebanner $(BANNER_IMAGE_ARG) "$(BANNER_IMAGE)" $(BANNER_AUDIO_ARG) "$(BANNER_AUDIO)" -o "$(BUILD)/banner.bnr"
 	@$(BANNERTOOL) makesmdh -s "$(APP_TITLE)" -l "$(APP_DESCRIPTION)" -p "$(APP_AUTHOR)" -i "$(APP_ICON)" -f "$(ICON_FLAGS)" -o "$(BUILD)/icon.icn"
 	$(MAKEROM) -f cia -o "$(OUTPUT).cia" -target t -exefslogo $(MAKEROM_ARGS)
+
+# Runs the platform-independent checks on the build host. This keeps the
+# presentation, texture-layout, and telemetry logic testable without 3DS hardware.
+test-host: $(HOST_TEST_BINARY)
+	$(HOST_TEST_BINARY)
+
+$(HOST_TEST_BINARY): tests/foundation_smoke.cpp src/presentation_state.cpp src/presentation_state.hpp src/stream_telemetry.cpp src/stream_telemetry.hpp src/video/video_layout.hpp | $(BUILD)
+	$(HOST_CXX) -std=gnu++17 -Wall -Wextra -Werror -Isrc tests/foundation_smoke.cpp src/presentation_state.cpp src/stream_telemetry.cpp -o $@
 
 $(BUILD):
 	@mkdir -p $@

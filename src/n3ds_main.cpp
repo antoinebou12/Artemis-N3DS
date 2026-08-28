@@ -26,11 +26,13 @@
 #include "system/n3ds_connection.hpp"
 #include "system/pair_record.hpp"
 #include "video/video.hpp"
+#include "video/video_layout.hpp"
 
 #include <3ds.h>
 #include <Limelight.h>
 
 #include <client.h>
+#include <errors.h>
 #include <http.h>
 
 #include <algorithm>
@@ -419,12 +421,13 @@ void choose_presentation(PCONFIGURATION config, const SelectedHost &host) {
 
 void choose_resolution(PCONFIGURATION config) {
     const std::vector<std::string> items = {
-        "400x240   Native logical resolution",
-        "800x480   High-detail 2D stream",
-        "800x240   Side-by-side stereo source",
+        "400x240   Native logical resolution (all models)",
+        "800x480   High-detail 2D stream (New 3DS recommended)",
+        "800x240   Side-by-side stereo source (New 3DS recommended)",
         "Custom...",
     };
-    const auto result = show_menu("Resolution", "3DS-friendly modes", items);
+    const auto result = show_menu(
+        "Resolution", "All models: up to 1024x512 stream input", items);
     if (result.action != UiMenuAction::Select) {
         return;
     }
@@ -444,11 +447,19 @@ void choose_resolution(PCONFIGURATION config) {
         set_global_presentation_state(
             {PresentationMode::StereoSideBySide, 1.0f, 0.0f, 0.0f, true});
         break;
-    case 3:
-        config->stream.width = prompt_int("Stream width", config->stream.width);
-        config->stream.height =
-            prompt_int("Stream height", config->stream.height);
+    case 3: {
+        const int width = prompt_int("Stream width", config->stream.width);
+        const int height = prompt_int("Stream height", config->stream.height);
+        if (!moon_video_resolution_is_supported(width, height)) {
+            show_message("Unsupported Resolution",
+                         "Enter a width from 1 to 1024 and a height from 1 "
+                         "to 512.");
+            return;
+        }
+        config->stream.width = width;
+        config->stream.height = height;
         break;
+    }
     default:
         break;
     }
@@ -758,6 +769,27 @@ static inline void stream_loop(PCONFIGURATION config,
 
 bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
                   const RemoteApp &app) {
+    if (!moon_video_resolution_is_supported(config->stream.width,
+                                            config->stream.height)) {
+        show_message("Unsupported Resolution",
+                     "This 3DS renderer supports stream input from 1x1 up "
+                     "to 1024x512. Choose a supported resolution in Video "
+                     "Settings before starting the stream.");
+        return false;
+    }
+
+    bool is_new_3ds = false;
+    APT_CheckNew3DS(&is_new_3ds);
+    const bool use_hardware_decoder =
+        config->video_decoder == HARDWARE_VIDEO_DECODER && is_new_3ds;
+    if (config->video_decoder == HARDWARE_VIDEO_DECODER && !is_new_3ds) {
+        show_message("Software Decoder Selected",
+                     "Original Nintendo 3DS and Nintendo 3DS XL do not "
+                     "have the New 3DS hardware video decoder. Moonlight "
+                     "will use software decoding; 400x240 at 30 FPS is "
+                     "recommended.");
+    }
+
     n3ds_ui_status("Starting Stream", app.name,
                    {std::to_string(config->stream.width) + "x" +
                         std::to_string(config->stream.height) + " at " +
@@ -782,7 +814,8 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
     PDECODER_RENDERER_CALLBACKS video_callbacks = &decoder_callbacks_mock;
     switch (config->video_decoder) {
     case VIDEO_DECODER_TYPE::HARDWARE_VIDEO_DECODER:
-        video_callbacks = &decoder_callbacks_n3ds_mvd;
+        video_callbacks = use_hardware_decoder ? &decoder_callbacks_n3ds_mvd
+                                                : &decoder_callbacks_n3ds;
         break;
     case VIDEO_DECODER_TYPE::SOFTWARE_VIDEO_DECODER:
         video_callbacks = &decoder_callbacks_n3ds;
