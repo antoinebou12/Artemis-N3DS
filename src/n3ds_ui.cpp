@@ -41,8 +41,10 @@ constexpr std::size_t kMaxDrawTextBytes = 384;
 struct TouchMenuState {
     bool active = false;
     bool moved = false;
+    int start_x = 0;
     int start_y = 0;
     int start_selected = -1;
+    int pressed_index = -1;
     int last_x = 0;
     int last_y = 0;
     int action_column = -1;
@@ -55,6 +57,13 @@ std::string bounded_text(const std::string &value) {
     std::string result = value.substr(0, kMaxDrawTextBytes - 3);
     result += "...";
     return result;
+}
+
+std::string ellipsize(const std::string &value, std::size_t max_chars) {
+    if (value.size() <= max_chars || max_chars < 4) {
+        return value;
+    }
+    return value.substr(0, max_chars - 3) + "...";
 }
 
 void draw_text(const std::string &value, float x, float y, float scale,
@@ -106,14 +115,14 @@ u32 item_accent(const std::string &item) {
 void draw_pill(const std::string &label, float x, float y, float width,
                u32 background, u32 foreground) {
     C2D_DrawRectSolid(x, y, 0.45f, width, 18.0f, background);
-    draw_text(label, x + 7.0f, y + 3.0f, 0.29f, foreground, width - 12.0f);
+    draw_text(ellipsize(label, 12), x + 7.0f, y + 3.0f, 0.29f, foreground);
 }
 
 void draw_header(const std::string &title, const std::string &subtitle) {
     draw_text("ARTEMIS 3DS", 18.0f, 10.0f, 0.30f, kAccent);
-    draw_text(title, 18.0f, 27.0f, 0.69f, kText, 275.0f);
+    draw_text(ellipsize(title, 34), 18.0f, 27.0f, 0.69f, kText);
     if (!subtitle.empty()) {
-        draw_text(subtitle, 19.0f, 54.0f, 0.37f, kMuted, 360.0f);
+        draw_text(ellipsize(subtitle, 66), 19.0f, 54.0f, 0.37f, kMuted);
     }
     C2D_DrawRectSolid(18.0f, 72.0f, 0.4f, 364.0f, 2.0f, kAccent);
 }
@@ -148,8 +157,8 @@ void draw_top_overview(const std::vector<std::string> &items, int selected) {
             C2D_DrawRectSolid(18.0f, y, 0.45f, 4.0f, 25.0f, accent);
             C2D_DrawRectSolid(361.0f, y + 8.0f, 0.45f, 9.0f, 9.0f, accent);
         }
-        draw_text(items[item_index], 30.0f, y + 4.0f, 0.40f,
-                  is_selected ? kText : kMuted, 323.0f);
+        draw_text(ellipsize(items[item_index], 60), 30.0f, y + 4.0f, 0.40f,
+                  is_selected ? kText : kMuted);
     }
 
     char counter[48];
@@ -170,8 +179,8 @@ void draw_action_button(float x, float width, const char *key,
               primary && enabled ? C2D_Color32(174, 221, 255, 255)
                                  : kSurfaceSelected,
               primary && enabled ? kDarkText : foreground);
-    draw_text(label, x + 31.0f, kActionBarY + 13.0f, 0.30f, foreground,
-              width - 34.0f);
+    draw_text(ellipsize(label, 9), x + 31.0f, kActionBarY + 13.0f, 0.30f,
+              foreground);
 }
 
 void draw_bottom_actions(const std::string &secondary_label,
@@ -189,10 +198,9 @@ void draw_bottom_touch_menu(const std::string &title,
                             int selected,
                             const std::string &secondary_label,
                             bool allow_refresh) {
-    draw_text(title, 10.0f, 8.0f, 0.48f, kText, 205.0f);
+    draw_text(ellipsize(title, 28), 10.0f, 8.0f, 0.48f, kText);
     draw_text("Touch", 258.0f, 10.0f, 0.31f, kAccent);
-    draw_text("tap to open  |  drag to scroll", 10.0f, 34.0f, 0.29f, kMuted,
-              300.0f);
+    draw_text("tap to open  |  drag to scroll", 10.0f, 34.0f, 0.29f, kMuted);
 
     if (!items.empty()) {
         const int safe_selected =
@@ -217,8 +225,8 @@ void draw_bottom_touch_menu(const std::string &title,
                                   accent);
                 draw_text(">", 292.0f, y + 5.0f, 0.38f, accent);
             }
-            draw_text(items[item_index], 18.0f, y + 5.0f, 0.35f,
-                      is_selected ? kText : kMuted, 266.0f);
+            draw_text(ellipsize(items[item_index], 44), 18.0f, y + 5.0f,
+                      0.35f, is_selected ? kText : kMuted);
         }
     } else {
         C2D_DrawRectSolid(7.0f, kTouchRowsY, 0.3f, 306.0f, 58.0f, kSurface);
@@ -487,18 +495,27 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
             hidTouchRead(&touch);
             touch_state.active = true;
             touch_state.moved = false;
+            touch_state.start_x = touch.px;
             touch_state.start_y = touch.py;
-            touch_state.start_selected = selected;
             touch_state.last_x = touch.px;
             touch_state.last_y = touch.py;
             touch_state.action_column = action_column_at(touch);
+            touch_state.pressed_index = -1;
 
             if (touch_state.action_column < 0) {
                 const int touched_row = touch_row_at(items, selected, touch);
-                if (touched_row >= 0 && touched_row != selected) {
-                    selected = touched_row;
-                    dirty = true;
+                if (touched_row >= 0) {
+                    touch_state.pressed_index = touched_row;
+                    touch_state.start_selected = touched_row;
+                    if (touched_row != selected) {
+                        selected = touched_row;
+                        dirty = true;
+                    }
+                } else {
+                    touch_state.start_selected = selected;
                 }
+            } else {
+                touch_state.start_selected = selected;
             }
         }
 
@@ -508,18 +525,21 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
             touch_state.last_x = touch.px;
             touch_state.last_y = touch.py;
 
-            if (touch_state.action_column < 0 && !items.empty()) {
-                const int delta_y = touch_state.start_y - touch.py;
-                if (std::abs(delta_y) >= 12) {
-                    touch_state.moved = true;
-                    const int rows = delta_y / 24;
-                    const int next_selected = std::clamp(
-                        touch_state.start_selected + rows, 0,
-                        static_cast<int>(items.size()) - 1);
-                    if (next_selected != selected) {
-                        selected = next_selected;
-                        dirty = true;
-                    }
+            const int delta_x = touch.px - touch_state.start_x;
+            const int delta_y = touch_state.start_y - touch.py;
+            if (std::abs(delta_x) >= 18 || std::abs(delta_y) >= 12) {
+                touch_state.moved = true;
+            }
+
+            if (touch_state.action_column < 0 && !items.empty() &&
+                std::abs(delta_y) >= 12) {
+                const int rows = delta_y / 24;
+                const int next_selected = std::clamp(
+                    touch_state.start_selected + rows, 0,
+                    static_cast<int>(items.size()) - 1);
+                if (next_selected != selected) {
+                    selected = next_selected;
+                    dirty = true;
                 }
             }
         }
@@ -539,13 +559,14 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                             selected)) {
                         return result;
                     }
-                } else if (touch_state.action_column < 0) {
-                    const int touched_row = touch_row_at(items, selected, release);
-                    if (touched_row >= 0) {
-                        result.action = UiMenuAction::Select;
-                        result.index = touched_row;
-                        return result;
-                    }
+                } else if (touch_state.action_column < 0 &&
+                           touch_state.pressed_index >= 0 &&
+                           release.py >= kTouchRowsY &&
+                           release.py < kTouchRowsBottom && release.px >= 7 &&
+                           release.px <= 313) {
+                    result.action = UiMenuAction::Select;
+                    result.index = touch_state.pressed_index;
+                    return result;
                 }
             }
 
@@ -612,7 +633,7 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     for (const auto &line : lines) {
         C2D_DrawRectSolid(18.0f, y, 0.3f, 364.0f, 27.0f, kSurface);
         C2D_DrawRectSolid(18.0f, y, 0.45f, 4.0f, 27.0f, kAccent);
-        draw_text(line, 30.0f, y + 5.0f, 0.39f, kText, 340.0f);
+        draw_text(ellipsize(line, 62), 30.0f, y + 5.0f, 0.39f, kText);
         y += 31.0f;
         if (y > 220.0f) {
             break;
