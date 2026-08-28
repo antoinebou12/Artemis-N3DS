@@ -33,6 +33,9 @@ class N3dsTouchscreenInput : public ISubscriber {
     void accept(IMessage *msg) override;
 
     void n3dsinput_handle_touch(u32 kDown, u32 kUp);
+    void n3dsinput_handle_navigation(u32 kDown, const circlePosition &cpad,
+                                     const circlePosition &cstick);
+    bool captures_gamepad_input() const;
 
   private:
     void _n3dsinput_set_touch(N3dsTouchType touch_type_in);
