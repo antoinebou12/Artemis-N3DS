@@ -89,7 +89,7 @@ void N3dsTouchscreenInput::n3dsinput_handle_touch(u32 kDown, u32 kUp) {
         return;
     }
 
-    touchPosition touch;
+    touchPosition touch{};
     hidTouchRead(&touch);
     if (kDown & KEY_TOUCH) {
         handler->handle_touch_down(touch);
@@ -98,4 +98,18 @@ void N3dsTouchscreenInput::n3dsinput_handle_touch(u32 kDown, u32 kUp) {
     } else {
         handler->handle_touch_hold(touch);
     }
+}
+
+void N3dsTouchscreenInput::n3dsinput_handle_navigation(
+    u32 kDown, const circlePosition &cpad, const circlePosition &cstick) {
+    if (next_touch_type.load() != touch_type) {
+        _n3dsinput_set_touch(next_touch_type.load());
+    }
+    if (handler != nullptr) {
+        handler->handle_navigation(kDown, cpad, cstick);
+    }
+}
+
+bool N3dsTouchscreenInput::captures_gamepad_input() const {
+    return handler != nullptr && handler->captures_gamepad_input();
 }
