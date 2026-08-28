@@ -20,7 +20,6 @@
 #include "../system/dispatcher.hpp"
 #include "gamepad_bgr.h"
 #include "keyboard_bgr.h"
-#include "menu_bgr.h"
 #include "touchpad_bgr.h"
 #include "video.hpp"
 
@@ -31,7 +30,6 @@ VideoDecoderBase::VideoDecoderBase(int width, int height) {
     surface_height = GSP_SCREEN_WIDTH;
     surface_width = width > GSP_SCREEN_HEIGHT_TOP ? GSP_SCREEN_HEIGHT_TOP_2X
                                                   : GSP_SCREEN_HEIGHT_TOP;
-    // Clamp output image to max dimensions supported by the renderer
     image_width = width > MOON_CTR_VIDEO_TEX_W ? MOON_CTR_VIDEO_TEX_W : width;
     image_height =
         height > MOON_CTR_VIDEO_TEX_H ? MOON_CTR_VIDEO_TEX_H : height;
@@ -119,13 +117,12 @@ void VideoDecoderBase::_accept_touch_state_changed(N3dsTouchType ttype) {
             pixel_size);
         break;
     case (N3dsTouchType::MENU_TOUCH):
+    case (N3dsTouchType::PERFORMANCE_TOUCH):
         renderer = std::make_unique<N3dsRendererNormal>(
             surface_width, surface_height, image_width, image_height,
             pixel_size);
-        (static_cast<N3dsRendererNormal *>(renderer.get()))
-            ->set_bottom_screen(menu_bgr);
         break;
-    default: // Disabled
+    default:
         renderer = std::make_unique<N3dsRendererMock>();
         break;
     }

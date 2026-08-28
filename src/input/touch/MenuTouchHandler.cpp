@@ -12,64 +12,119 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "../../system/dispatcher.hpp"
 #include "TouchHandler.hpp"
 #include <Limelight.h>
+#include <cstdio>
 #include <memory>
-#include <vector>
 
-static const int button_size_y = 60;
-static const int button_size_x = 160;
+namespace {
+constexpr int kButtonHeight = 60;
+constexpr int kButtonWidth = 160;
 
-// Map the Row and Column numbers of each button to their corresponding
-// Touch Type Setting
-static std::map<int, std::map<int, N3dsTouchType>> button_map{
-    {0, {{0, N3dsTouchType::GAMEPAD}, {1, N3dsTouchType::MOUSEPAD}}},
-    {1, {{0, N3dsTouchType::KEYBOARD}, {1, N3dsTouchType::ABSOLUTE_TOUCH}}},
-    {2, {{0, N3dsTouchType::DS_TOUCH}, {1, N3dsTouchType::MAGNIFY_TOUCH}}},
-    {3, {{0, N3dsTouchType::DEBUG_TOUCH}, {1, N3dsTouchType::DISABLED}}},
+const char *kButtonLabels[4][2] = {
+    {"GAMEPAD", "MOUSEPAD"},
+    {"KEYBOARD", "ABS TOUCH"},
+    {"DUAL SCREEN", "MAGNIFY"},
+    {"PERFORMANCE", "EXIT STREAM"},
 };
 
-MenuTouchHandler::MenuTouchHandler() { aptSetHomeAllowed(true); }
+N3dsTouchType kButtonTypes[4][2] = {
+    {N3dsTouchType::GAMEPAD, N3dsTouchType::MOUSEPAD},
+    {N3dsTouchType::KEYBOARD, N3dsTouchType::ABSOLUTE_TOUCH},
+    {N3dsTouchType::DS_TOUCH, N3dsTouchType::MAGNIFY_TOUCH},
+    {N3dsTouchType::PERFORMANCE_TOUCH, N3dsTouchType::DISABLED},
+};
 
-MenuTouchHandler::~MenuTouchHandler() { aptSetHomeAllowed(false); }
+void print_tile(const char *label, bool active) {
+    if (active) {
+        std::printf("> %-14s <", label);
+    } else {
+        std::printf("  %-14s  ", label);
+    }
+}
+} // namespace
+
+MenuTouchHandler::MenuTouchHandler() {
+    aptSetHomeAllowed(true);
+    redraw(true);
+}
+
+MenuTouchHandler::~MenuTouchHandler() {
+    consoleSelect(&DebugTouchHandler::topScreen);
+    aptSetHomeAllowed(false);
+}
+
+void MenuTouchHandler::redraw(bool force) {
+    const u64 now = svcGetSystemTick();
+    if (!force && last_redraw_ticks != 0 &&
+        now - last_redraw_ticks < (SYSCLOCK_ARM11 / 8)) {
+        return;
+    }
+    last_redraw_ticks = now;
+
+    // While streaming, the top screen remains entirely owned by the video
+    // renderer. Navigation is intentionally confined to the touch screen so
+    // opening Quick Actions never obscures gameplay/desktop content.
+    consoleSelect(&DebugTouchHandler::bottomScreen);
+    consoleClear();
+    std::printf("ARTEMIS 3DS   QUICK ACTIONS\n");
+    std::printf("Top: live stream | Bottom: touch controls\n");
+    std::printf("----------------------------------------\n");
+
+    for (int row = 0; row < 4; ++row) {
+        std::printf("\n");
+        print_tile(kButtonLabels[row][0], active_row == row && active_col == 0);
+        print_tile(kButtonLabels[row][1], active_row == row && active_col == 1);
+        std::printf("\n");
+    }
+
+    std::printf("\nTap and release a tile to switch mode.\n");
+}
+
+void MenuTouchHandler::update_touch_target(touchPosition touch) {
+    touch.py = touch.py < GSP_SCREEN_WIDTH ? touch.py : (touch.py - 1);
+    touch.px = touch.px < GSP_SCREEN_HEIGHT_BOTTOM ? touch.px : (touch.px - 1);
+
+    const int row = touch.py / kButtonHeight;
+    const int col = touch.px / kButtonWidth;
+    if (row < 0 || row > 3 || col < 0 || col > 1) {
+        active_row = -1;
+        active_col = -1;
+        message = nullptr;
+        return;
+    }
+
+    active_row = row;
+    active_col = col;
+    const N3dsTouchType touch_type = kButtonTypes[row][col];
+    if (touch_type == N3dsTouchType::DISABLED) {
+        message = std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM);
+    } else {
+        message = std::make_shared<TouchStateChangedMsg>(touch_type);
+    }
+}
 
 void MenuTouchHandler::_handle_touch_down(touchPosition touch) {
-    _handle_touch_hold(touch);
+    update_touch_target(touch);
+    redraw(true);
 }
 
 void MenuTouchHandler::_handle_touch_up(touchPosition touch) {
-    if (message != nullptr)
+    update_touch_target(touch);
+    if (message != nullptr) {
         MessageDispatcher::get_instance()->post(message);
+    }
+    message = nullptr;
+    active_row = -1;
+    active_col = -1;
+    redraw(true);
 }
 
 void MenuTouchHandler::_handle_touch_hold(touchPosition touch) {
-    touch.py = touch.py < GSP_SCREEN_WIDTH ? touch.py : (touch.py - 1);
-    touch.px = touch.px < GSP_SCREEN_HEIGHT_BOTTOM ? touch.px : (touch.px - 1);
-    int round_y = touch.py / button_size_y;
-    int round_x = touch.px / button_size_x;
-
-    N3dsTouchType touch_type = button_map[round_y][round_x];
-    switch (touch_type) {
-    case (N3dsTouchType::GAMEPAD):
-        message = std::make_shared<TouchStateChangedMsg>(touch_type);
-        break;
-    case (N3dsTouchType::MOUSEPAD):
-        message = std::make_shared<TouchStateChangedMsg>(touch_type);
-        break;
-    case (N3dsTouchType::KEYBOARD):
-        message = std::make_shared<TouchStateChangedMsg>(touch_type);
-        break;
-    case (N3dsTouchType::DISABLED):
-        // Signal to exit the stream
-        message = std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM);
-        break;
-    default:
-        message = std::make_shared<TouchStateChangedMsg>(touch_type);
-        break;
-    }
+    const int old_row = active_row;
+    const int old_col = active_col;
+    update_touch_target(touch);
+    redraw(old_row != active_row || old_col != active_col);
 }

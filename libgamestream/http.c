@@ -24,9 +24,26 @@
 #include <stdbool.h>
 #include <string.h>
 
-static CURL *curl;
+static CURL *curl = NULL;
 static uint32_t connection_timeout_s = 60;
 static int log_level = 0;
+
+static long connect_timeout_seconds(void) {
+    // Connection establishment should fail quickly on a handheld LAN client.
+    // Long operations such as pairing still keep their larger overall timeout.
+    if (connection_timeout_s <= 5)
+        return (long)connection_timeout_s;
+    return 5L;
+}
+
+static void apply_runtime_options(void) {
+    if (curl == NULL)
+        return;
+
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)connection_timeout_s);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, connect_timeout_seconds());
+    curl_easy_setopt(curl, CURLOPT_VERBOSE, log_level > 0 ? 1L : 0L);
+}
 
 static size_t _write_curl(void *contents, size_t size, size_t nmemb,
                           void *userp) {
@@ -45,6 +62,13 @@ static size_t _write_curl(void *contents, size_t size, size_t nmemb,
 }
 
 int http_init(const char *keyDirectory, int logLevel) {
+    // gs_init() may be called repeatedly when refreshing a host. Ensure we do
+    // not leak or stack easy handles between sessions.
+    if (curl != NULL) {
+        curl_easy_cleanup(curl);
+        curl = NULL;
+    }
+
     curl = curl_easy_init();
     if (!curl)
         return GS_FAILED;
@@ -69,25 +93,58 @@ int http_init(const char *keyDirectory, int logLevel) {
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _write_curl);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_SESSIONID_CACHE, 0L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, connection_timeout_s);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, log_level > 0 ? 1L : 0);
 
+    // The 3DS networking stack is IPv4-only in practice. Avoid wasting time on
+    // IPv6 resolution/connection attempts for hostnames.
+    curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
+#ifdef CURLOPT_TCP_KEEPALIVE
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPALIVE, 1L);
+#endif
+#ifdef CURLOPT_TCP_KEEPIDLE
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPIDLE, 15L);
+#endif
+#ifdef CURLOPT_TCP_KEEPINTVL
+    curl_easy_setopt(curl, CURLOPT_TCP_KEEPINTVL, 5L);
+#endif
+
+    // Keep the easy handle alive across serverinfo/applist/launch requests so
+    // libcurl can reuse the TCP/TLS connection when the host permits it.
+    curl_easy_setopt(curl, CURLOPT_FRESH_CONNECT, 0L);
+#ifndef __FreeBSD__
+    curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 0L);
+#endif
+
+    apply_runtime_options();
     return GS_OK;
 }
 
 void http_set_timeout_s(uint32_t connection_timeout_in) {
     connection_timeout_s = connection_timeout_in;
+    apply_runtime_options();
 }
 
-void http_set_log_level(int log_level_in) { log_level = log_level_in; }
+void http_set_log_level(int log_level_in) {
+    log_level = log_level_in;
+    apply_runtime_options();
+}
 
 int http_request(char *url, PHTTP_DATA data) {
+    if (curl == NULL) {
+        gs_error = "HTTP client is not initialized";
+        return GS_FAILED;
+    }
+    if (data == NULL) {
+        gs_error = "Invalid HTTP response buffer";
+        return GS_FAILED;
+    }
+
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, data);
     curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, connection_timeout_s);
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, log_level > 0 ? 1L : 0);
+    apply_runtime_options();
 #ifdef __FreeBSD__
-    curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1);
+    curl_easy_setopt(curl, CURLOPT_FORBID_REUSE, 1L);
 #endif
 
     if (log_level) {
@@ -118,7 +175,12 @@ int http_request(char *url, PHTTP_DATA data) {
     return GS_OK;
 }
 
-void http_cleanup() { curl_easy_cleanup(curl); }
+void http_cleanup() {
+    if (curl != NULL) {
+        curl_easy_cleanup(curl);
+        curl = NULL;
+    }
+}
 
 PHTTP_DATA http_create_data() {
     PHTTP_DATA data = malloc(sizeof(HTTP_DATA));

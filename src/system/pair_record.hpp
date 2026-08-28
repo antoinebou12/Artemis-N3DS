@@ -22,6 +22,7 @@
 #define MOONLIGHT_3DS_PATH "/3ds/moonlight"
 
 #ifdef __cplusplus
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -29,4 +30,9 @@ void trim(std::string &s);
 void add_pair_address(std::string address, uint16_t port);
 void remove_pair_address(std::string address, uint16_t port);
 std::vector<std::string> list_paired_addresses();
+
+std::string get_host_profile(const std::string &address, uint16_t port);
+void set_host_profile(const std::string &address, uint16_t port,
+                      const std::string &profile);
+void remove_host_profile(const std::string &address, uint16_t port);
 #endif

@@ -21,6 +21,7 @@
 #include "errors.h"
 
 #include <expat.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define STATUS_OK 200
@@ -30,6 +31,21 @@ struct xml_query {
   size_t size;
   int start;
   void* data;
+};
+
+enum applist_field {
+  APPLIST_FIELD_NONE = 0,
+  APPLIST_FIELD_ID,
+  APPLIST_FIELD_TITLE,
+};
+
+struct xml_applist_query {
+  PAPP_LIST head;
+  PAPP_LIST tail;
+  PAPP_LIST current;
+  char *memory;
+  size_t size;
+  enum applist_field field;
 };
 
 static void XMLCALL _xml_start_element(void *userData, const char *name, const char **atts) {
@@ -44,39 +60,122 @@ static void XMLCALL _xml_end_element(void *userData, const char *name) {
     search->start--;
 }
 
-static void XMLCALL _xml_start_applist_element(void *userData, const char *name, const char **atts) {
-  struct xml_query *search = (struct xml_query*) userData;
-  if (strcmp("App", name) == 0) {
-    PAPP_LIST app = malloc(sizeof(APP_LIST));
-    if (app == NULL)
-      return;
+static void _applist_reset_capture(struct xml_applist_query *query,
+                                   enum applist_field field) {
+  if (query->memory != NULL) {
+    free(query->memory);
+  }
+  query->memory = calloc(1, 1);
+  query->size = 0;
+  query->field = field;
+}
 
-    app->id = 0;
-    app->name = NULL;
-    app->next = (PAPP_LIST) search->data;
-    search->data = app;
-  } else if (strcmp("ID", name) == 0 || strcmp("AppTitle", name) == 0) {
-    search->memory = malloc(1);
-    search->size = 0;
-    search->start = 1;
+static void _applist_free(PAPP_LIST list) {
+  while (list != NULL) {
+    PAPP_LIST next = list->next;
+    free(list->name);
+    free(list);
+    list = next;
   }
 }
 
-static void XMLCALL _xml_end_applist_element(void *userData, const char *name) {
-  struct xml_query *search = (struct xml_query*) userData;
-  if (search->start) {
-    PAPP_LIST list = (PAPP_LIST) search->data;
-    if (list == NULL)
-      return;
+static void XMLCALL _xml_start_applist_element(void *userData, const char *name,
+                                                const char **atts) {
+  (void)atts;
+  struct xml_applist_query *query = (struct xml_applist_query*) userData;
 
-    if (strcmp("ID", name) == 0) {
-        list->id = atoi(search->memory);
-        free(search->memory);
-    } else if (strcmp("AppTitle", name) == 0) {
-        list->name = search->memory;
+  if (strcmp("App", name) == 0) {
+    if (query->current != NULL) {
+      free(query->current->name);
+      free(query->current);
     }
-    search->start = 0;
+    query->current = calloc(1, sizeof(APP_LIST));
+    query->field = APPLIST_FIELD_NONE;
+    return;
   }
+
+  if (query->current == NULL) {
+    return;
+  }
+
+  if (strcmp("ID", name) == 0) {
+    _applist_reset_capture(query, APPLIST_FIELD_ID);
+  } else if (strcmp("AppTitle", name) == 0) {
+    _applist_reset_capture(query, APPLIST_FIELD_TITLE);
+  }
+  // Modern Sunshine/Vibepollo may also include UUID, ArtVersion,
+  // IsHdrSupported, and other metadata. Those fields are intentionally
+  // ignored here so the legacy 3DS APP_LIST stays compatible.
+}
+
+static void XMLCALL _xml_end_applist_element(void *userData, const char *name) {
+  struct xml_applist_query *query = (struct xml_applist_query*) userData;
+
+  if (query->current == NULL) {
+    return;
+  }
+
+  if (strcmp("ID", name) == 0 && query->field == APPLIST_FIELD_ID) {
+    if (query->memory != NULL) {
+      query->current->id = atoi(query->memory);
+    }
+    free(query->memory);
+    query->memory = NULL;
+    query->size = 0;
+    query->field = APPLIST_FIELD_NONE;
+    return;
+  }
+
+  if (strcmp("AppTitle", name) == 0 &&
+      query->field == APPLIST_FIELD_TITLE) {
+    free(query->current->name);
+    query->current->name = query->memory;
+    query->memory = NULL;
+    query->size = 0;
+    query->field = APPLIST_FIELD_NONE;
+    return;
+  }
+
+  if (strcmp("App", name) == 0) {
+    const bool valid = query->current->id > 0 &&
+                       query->current->name != NULL &&
+                       query->current->name[0] != '\0';
+    if (valid) {
+      query->current->next = NULL;
+      if (query->tail != NULL) {
+        query->tail->next = query->current;
+      } else {
+        query->head = query->current;
+      }
+      query->tail = query->current;
+    } else {
+      free(query->current->name);
+      free(query->current);
+    }
+    query->current = NULL;
+  }
+}
+
+static void XMLCALL _xml_write_applist_data(void *userData, const XML_Char *s,
+                                             int len) {
+  struct xml_applist_query *query = (struct xml_applist_query*) userData;
+  if (query->field == APPLIST_FIELD_NONE || query->memory == NULL) {
+    return;
+  }
+
+  char *next = realloc(query->memory, query->size + len + 1);
+  if (next == NULL) {
+    free(query->memory);
+    query->memory = NULL;
+    query->size = 0;
+    query->field = APPLIST_FIELD_NONE;
+    return;
+  }
+
+  query->memory = next;
+  memcpy(&(query->memory[query->size]), s, len);
+  query->size += len;
+  query->memory[query->size] = 0;
 }
 
 static void XMLCALL _xml_start_mode_element(void *userData, const char *name, const char **atts) {
@@ -106,6 +205,7 @@ static void XMLCALL _xml_end_mode_element(void *userData, const char *name) {
       mode->refresh = atoi(search->memory);
 
     free(search->memory);
+    search->memory = NULL;
     search->start = 0;
   }
 }
@@ -122,14 +222,18 @@ static void XMLCALL _xml_start_status_element(void *userData, const char *name, 
   }
 }
 
-static void XMLCALL _xml_end_status_element(void *userData, const char *name) { }
+static void XMLCALL _xml_end_status_element(void *userData, const char *name) {
+  (void)userData;
+  (void)name;
+}
 
 static void XMLCALL _xml_write_data(void *userData, const XML_Char *s, int len) {
   struct xml_query *search = (struct xml_query*) userData;
   if (search->start > 0) {
-    search->memory = realloc(search->memory, search->size + len + 1);
-    if(search->memory == NULL)
+    char *next = realloc(search->memory, search->size + len + 1);
+    if (next == NULL)
       return;
+    search->memory = next;
 
     memcpy(&(search->memory[search->size]), s, len);
     search->size += len;
@@ -147,7 +251,7 @@ int xml_search(char* data, size_t len, char* node, char** result) {
   XML_SetUserData(parser, &search);
   XML_SetElementHandler(parser, _xml_start_element, _xml_end_element);
   XML_SetCharacterDataHandler(parser, _xml_write_data);
-  if (! XML_Parse(parser, data, len, 1)) {
+  if (!XML_Parse(parser, data, len, 1)) {
     int code = XML_GetErrorCode(parser);
     gs_error = XML_ErrorString(code);
     XML_ParserFree(parser);
@@ -165,25 +269,44 @@ int xml_search(char* data, size_t len, char* node, char** result) {
 }
 
 int xml_applist(char* data, size_t len, PAPP_LIST *app_list) {
-  struct xml_query query;
-  query.memory = calloc(1, 1);
-  query.size = 0;
-  query.start = 0;
-  query.data = NULL;
+  if (app_list == NULL) {
+    return GS_INVALID;
+  }
+  *app_list = NULL;
+
+  struct xml_applist_query query;
+  memset(&query, 0, sizeof(query));
+
   XML_Parser parser = XML_ParserCreate("UTF-8");
+  if (parser == NULL) {
+    return GS_OUT_OF_MEMORY;
+  }
+
   XML_SetUserData(parser, &query);
-  XML_SetElementHandler(parser, _xml_start_applist_element, _xml_end_applist_element);
-  XML_SetCharacterDataHandler(parser, _xml_write_data);
-  if (! XML_Parse(parser, data, len, 1)) {
+  XML_SetElementHandler(parser, _xml_start_applist_element,
+                        _xml_end_applist_element);
+  XML_SetCharacterDataHandler(parser, _xml_write_applist_data);
+  if (!XML_Parse(parser, data, len, 1)) {
     int code = XML_GetErrorCode(parser);
     gs_error = XML_ErrorString(code);
     XML_ParserFree(parser);
+    free(query.memory);
+    if (query.current != NULL) {
+      free(query.current->name);
+      free(query.current);
+    }
+    _applist_free(query.head);
     return GS_INVALID;
   }
 
   XML_ParserFree(parser);
-  *app_list = (PAPP_LIST) query.data;
+  free(query.memory);
+  if (query.current != NULL) {
+    free(query.current->name);
+    free(query.current);
+  }
 
+  *app_list = query.head;
   return GS_OK;
 }
 
@@ -194,18 +317,19 @@ int xml_modelist(char* data, size_t len, PDISPLAY_MODE *mode_list) {
   XML_SetUserData(parser, &query);
   XML_SetElementHandler(parser, _xml_start_mode_element, _xml_end_mode_element);
   XML_SetCharacterDataHandler(parser, _xml_write_data);
-  if (! XML_Parse(parser, data, len, 1)) {
+  if (!XML_Parse(parser, data, len, 1)) {
     int code = XML_GetErrorCode(parser);
     gs_error = XML_ErrorString(code);
     XML_ParserFree(parser);
+    free(query.memory);
     return GS_INVALID;
   }
 
   XML_ParserFree(parser);
+  free(query.memory);
   *mode_list = (PDISPLAY_MODE) query.data;
 
   return GS_OK;
-
 }
 
 int xml_status(char* data, size_t len) {

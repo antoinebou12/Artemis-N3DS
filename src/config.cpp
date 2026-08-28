@@ -19,6 +19,7 @@
 
 #include "config.hpp"
 #include "audio/audio.h"
+#include "stream_profile.hpp"
 #include "system/pair_record.hpp"
 #include "util.h"
 
@@ -53,6 +54,7 @@ static struct option long_options[] = {
     {"swapfacebuttons", required_argument, NULL, 'A'},
     {"swaptriggersandshoulders", required_argument, NULL, 'B'},
     {"usetriggersformouse", required_argument, NULL, 'C'},
+    {"profile", required_argument, NULL, 'P'},
     {0, 0, 0, 0},
 };
 
@@ -115,6 +117,17 @@ void parse_argument(int c, char *value, PCONFIGURATION config) {
         config->use_triggers_for_mouse =
             ((value != NULL) && (strcmp(value, "true") == 0));
         break;
+    case 'P': {
+        const StreamProfilePreset *profile = find_stream_profile(value);
+        if (profile == nullptr) {
+            fprintf(stderr, "Unknown stream profile: %s\n",
+                    value != NULL ? value : "(null)");
+            break;
+        }
+        config->profile = value;
+        apply_stream_profile(config, *profile);
+        break;
+    }
     case 1:
         if (config->action == NULL)
             config->action = value;
@@ -158,6 +171,8 @@ void config_save(char *filename, PCONFIGURATION config) {
         exit(EXIT_FAILURE);
     }
 
+    if (config->profile != NULL)
+        write_config_string(fd, "profile", config->profile);
     write_config_int(fd, "width", config->stream.width);
     write_config_int(fd, "height", config->stream.height);
     write_config_int(fd, "fps", config->stream.fps);
@@ -195,6 +210,7 @@ void config_parse(int argc, char *argv[], PCONFIGURATION config) {
     config->action = NULL;
     config->address = NULL;
     config->config_file = NULL;
+    config->profile = NULL;
     config->audio_device = NULL;
     config->sops = true;
     config->localaudio = false;

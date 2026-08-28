@@ -26,7 +26,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 
-std::unique_ptr<N3dsConnectionListener> N3dsConnectionListener::instance =
+std::shared_ptr<N3dsConnectionListener> N3dsConnectionListener::instance =
     nullptr;
 
 void N3dsConnectionListener::connection_terminated(int errorCode) {
@@ -98,7 +98,6 @@ void N3dsConnectionListener::set_motion_event_state(
     case LI_MOTION_TYPE_ACCEL:
         if (reportRateHz > 0) {
             HIDUSER_EnableAccelerometer();
-            // Alert the input handler
             auto pDispatcher = MessageDispatcher::get_instance();
             auto msg = std::make_shared<GenericEventMsg>(ENABLE_ACCEL);
             pDispatcher->post(msg);
@@ -109,7 +108,6 @@ void N3dsConnectionListener::set_motion_event_state(
     case LI_MOTION_TYPE_GYRO:
         if (reportRateHz > 0) {
             HIDUSER_EnableGyroscope();
-            // Alert the input handler
             auto pDispatcher = MessageDispatcher::get_instance();
             auto msg = std::make_shared<GenericEventMsg>(ENABLE_GYRO);
             pDispatcher->post(msg);

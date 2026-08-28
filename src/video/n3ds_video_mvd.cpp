@@ -18,6 +18,8 @@
  */
 
 #include "video.hpp"
+#include "../stream_telemetry.hpp"
+#include "../stream_telemetry_store.hpp"
 
 #include <3ds.h>
 
@@ -33,6 +35,11 @@
 
 static std::unique_ptr<MvdDecoder> instance = nullptr;
 
+static inline float ticks_to_ms(u64 ticks) {
+    return (static_cast<float>(ticks) * 1000.0f) /
+           static_cast<float>(SYSCLOCK_ARM11);
+}
+
 MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
                        void *context, int drFlags)
     : VideoDecoderBase(width, height) {
@@ -43,7 +50,6 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
         throw std::runtime_error("Unsupported hardware");
     }
 
-    // Calculate required buffer size
     MVDSTD_CalculateWorkBufSizeConfig config = {
         0,
     };
@@ -62,6 +68,8 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
     }
 
     first_frame = true;
+    last_present_ticks = 0;
+    reset_global_stream_telemetry();
     status = mvdstdInit(MVDMODE_VIDEOPROCESSING, MVD_INPUT_H264,
                         MVD_OUTPUT_BGR565, size, NULL);
     if (status) {
@@ -70,8 +78,10 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
         throw std::runtime_error("mvdstdInit failed");
     }
 
-    rgb_img_buffer = (u8 *)linearAlloc(MOON_CTR_VIDEO_TEX_W *
-                                       MOON_CTR_VIDEO_TEX_H * pixel_size);
+    const int texture_width = moon_video_texture_width(image_width);
+    const int texture_height = moon_video_texture_height(image_height);
+    rgb_img_buffer =
+        (u8 *)linearAlloc(texture_width * texture_height * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
         throw std::runtime_error("Out of memory");
@@ -88,43 +98,75 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
                                 image_height, NULL, (u32 *)rgb_img_buffer,
                                 NULL);
 
-    // Place within the 1024x512 buffer
+    // Keep MVD output stride exactly aligned with the renderer's power-of-two
+    // texture. 400x240 therefore uses 512x256 instead of 1024x512.
     mvdstd_config.flag_x104 = 1;
-    mvdstd_config.output_width_override = MOON_CTR_VIDEO_TEX_W;
-    mvdstd_config.output_height_override = MOON_CTR_VIDEO_TEX_H;
+    mvdstd_config.output_width_override = texture_width;
+    mvdstd_config.output_height_override = texture_height;
     MVDSTD_SetConfig(&mvdstd_config);
 }
 
-// This function must be called after
-// decoding is finished
 MvdDecoder::~MvdDecoder() {
-    y2rExit();
     mvdstdExit();
     linearFree(nal_unit_buffer);
     linearFree(rgb_img_buffer);
     printf("Video decoder shutdown successfully\n");
 }
 
-// packets must be decoded in order
-// indata must be inlen + AV_INPUT_BUFFER_PADDING_SIZE in length
 DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
-    int ret = mvdstdProcessVideoFrame(indata, inlen, 1, NULL);
-    if (!MVD_CHECKNALUPROC_SUCCESS(ret)) {
-        return DecodeReturnStatus::ERROR;
-    }
+    // A Moonlight decode unit may contain several Annex-B NAL units (for
+    // example SPS + PPS + slice). MVD can report INCOMPLETEPROCESSING with the
+    // amount of data still unconsumed, so walk the whole decode unit rather
+    // than discarding everything after the first NAL.
+    unsigned char *cursor = indata;
+    size_t remaining = inlen > 0 ? static_cast<size_t>(inlen) : 0;
 
-    if (ret != MVD_STATUS_PARAMSET && ret != MVD_STATUS_INCOMPLETEPROCESSING) {
+    // A normal video frame contains only a handful of NALs. The guard prevents
+    // malformed MVD progress information from ever spinning in the decoder
+    // callback.
+    for (int iteration = 0; remaining > 0 && iteration < 64; ++iteration) {
+        MVDSTD_ProcessNALUnitOut output{};
+
+        // Flag 0 is the normal browser-style H.264 path. Flag 1 tells MVD to
+        // short-circuit coded non-IDR slices with MVD_STATUS_NALUPROCFLAG,
+        // which is inappropriate for normal game-stream frames.
+        const int ret =
+            mvdstdProcessVideoFrame(cursor, remaining, 0, &output);
+        if (!MVD_CHECKNALUPROC_SUCCESS(ret)) {
+            return DecodeReturnStatus::ERROR;
+        }
+
+        if (ret == MVD_STATUS_FRAMEREADY) {
+            const int render_ret =
+                mvdstdRenderVideoFrame(&mvdstd_config, true);
+            return render_ret == MVD_STATUS_OK ? DecodeReturnStatus::SUCCESS
+                                               : DecodeReturnStatus::ERROR;
+        }
+
+        // When MVD leaves bytes unconsumed, advance to exactly that remainder.
+        // This handles SPS/PPS followed by the coded slice in the same decode
+        // unit without presenting stale RGB data for the parameter NALs.
+        if (output.remaining_size > 0 && output.remaining_size < remaining) {
+            const size_t consumed = remaining - output.remaining_size;
+            cursor += consumed;
+            remaining = output.remaining_size;
+            continue;
+        }
+
+        // PARAMSET/OK/NALUPROCFLAG without a remainder consumed this input but
+        // did not produce a complete display frame.
         return DecodeReturnStatus::NO_FRAME_PRODUCED;
     }
-    ret = mvdstdRenderVideoFrame(&mvdstd_config, true);
-    if (ret != MVD_STATUS_OK) {
+
+    // Reaching the guard with data remaining means MVD failed to make progress.
+    if (remaining > 0) {
         return DecodeReturnStatus::ERROR;
     }
-    return DecodeReturnStatus::SUCCESS;
+    return DecodeReturnStatus::NO_FRAME_PRODUCED;
 }
 
 int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
-    u64 start_ticks = svcGetSystemTick();
+    const u64 decode_start_ticks = svcGetSystemTick();
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
 
@@ -142,14 +184,36 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     }
     GSPGPU_FlushDataCache(nal_unit_buffer, length);
 
-    _decode((unsigned char *)nal_unit_buffer, length);
+    const DecodeReturnStatus decode_status =
+        _decode((unsigned char *)nal_unit_buffer, length);
+    const u64 decode_end_ticks = svcGetSystemTick();
+
+    if (decode_status == DecodeReturnStatus::NO_FRAME_PRODUCED) {
+        return DR_OK;
+    }
+    if (decode_status == DecodeReturnStatus::ERROR) {
+        return DR_NEED_IDR;
+    }
 
     renderer_lock.lock();
-    renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
+    renderer->set_perf_decode_ticks(decode_end_ticks - decode_start_ticks);
+    const u64 render_start_ticks = svcGetSystemTick();
     renderer->write_px_to_framebuffer(rgb_img_buffer);
+    const u64 present_ticks = svcGetSystemTick();
     renderer_lock.unlock();
 
-    // If MVD never gets an IDR frame, everything shows up gray
+    StreamTelemetrySample sample{};
+    sample.decode_ms = ticks_to_ms(decode_end_ticks - decode_start_ticks);
+    sample.render_ms = ticks_to_ms(present_ticks - render_start_ticks);
+    if (last_present_ticks != 0) {
+        sample.frame_ms = ticks_to_ms(present_ticks - last_present_ticks);
+        if (sample.frame_ms > 0.0f) {
+            sample.fps = 1000.0f / sample.frame_ms;
+        }
+    }
+    push_global_stream_telemetry(sample);
+    last_present_ticks = present_ticks;
+
     if (first_frame) {
         first_frame = false;
         return DR_NEED_IDR;
