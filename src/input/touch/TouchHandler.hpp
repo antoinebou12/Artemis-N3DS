@@ -46,6 +46,16 @@ class TouchHandlerBase {
     void handle_touch_up(touchPosition touch);
     void handle_touch_hold(touchPosition touch);
 
+    // Quick/diagnostic surfaces can capture local controls so menu navigation
+    // never leaks A/B/D-pad/analog input into the remote game.
+    virtual bool captures_gamepad_input() const { return false; }
+    virtual void handle_navigation(u32 keys_down, const circlePosition &cpad,
+                                   const circlePosition &cstick) {
+        (void)keys_down;
+        (void)cpad;
+        (void)cstick;
+    }
+
   private:
     virtual void _handle_touch_down(touchPosition touch) = 0;
     virtual void _handle_touch_up(touchPosition touch) = 0;
@@ -76,18 +86,29 @@ class MenuTouchHandler : public TouchHandlerBase {
     MenuTouchHandler();
     ~MenuTouchHandler();
 
+    bool captures_gamepad_input() const override { return true; }
+    void handle_navigation(u32 keys_down, const circlePosition &cpad,
+                           const circlePosition &cstick) override;
+
   private:
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
     void _handle_touch_hold(touchPosition touch) override;
     void redraw(bool force = false);
     void update_touch_target(touchPosition touch);
+    void activate_selected();
+    void move_selection(int dx, int dy);
 
   private:
     std::shared_ptr<IMessage> message = nullptr;
     u64 last_redraw_ticks = 0;
+    u64 next_nav_repeat_ticks = 0;
     int active_row = -1;
     int active_col = -1;
+    int selected_row = 0;
+    int selected_col = 0;
+    int last_nav_x = 0;
+    int last_nav_y = 0;
 };
 
 class PerformanceTouchHandler : public TouchHandlerBase {
@@ -95,11 +116,17 @@ class PerformanceTouchHandler : public TouchHandlerBase {
     PerformanceTouchHandler();
     ~PerformanceTouchHandler();
 
+    bool captures_gamepad_input() const override { return true; }
+    void handle_navigation(u32 keys_down, const circlePosition &cpad,
+                           const circlePosition &cstick) override;
+
   private:
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
     void _handle_touch_hold(touchPosition touch) override;
     void redraw(bool force = false);
+    void save_csv();
+    void go_back();
 
   private:
     u64 last_redraw_ticks = 0;
