@@ -83,8 +83,10 @@ SoftVideoDecoder::~SoftVideoDecoder() {
 inline int SoftVideoDecoder::_write_yuv_to_framebuffer(const u8 **source,
                                                        int width, int height,
                                                        int px_size) {
-    Handle conversion_finish_event_handle;
+    Handle conversion_finish_event_handle = 0;
     int status = 0;
+    const int texture_width = moon_video_texture_width(width);
+    const int texture_height = moon_video_texture_height(height);
     const u64 start_ticks = svcGetSystemTick();
 
     status = Y2RU_SetSendingY(source[0], width * height, width, 0);
@@ -105,8 +107,6 @@ inline int SoftVideoDecoder::_write_yuv_to_framebuffer(const u8 **source,
         goto y2ru_failed;
     }
 
-    const int texture_width = moon_video_texture_width(width);
-    const int texture_height = moon_video_texture_height(height);
     status = Y2RU_SetReceiving(
         rgb_img_buffer, texture_width * texture_height * px_size,
         width * px_size, (texture_width - width) * px_size);
