@@ -50,8 +50,6 @@ N3dsInput::N3dsInput(int image_width, int image_height, bool swap_face_buttons,
     _add_gamepad();
     use_triggers_for_mouse = use_triggers_for_mouse_in;
 
-    // Ternary setup is less efficient, but more readable.
-    // We can afford the minor performance cost here.
     CUSTOM_KEY_A = swap_face_buttons ? KEY_B : KEY_A;
     CUSTOM_KEY_B = swap_face_buttons ? KEY_A : KEY_B;
     CUSTOM_KEY_X = swap_face_buttons ? KEY_Y : KEY_X;
@@ -177,11 +175,57 @@ void N3dsInput::force_touchscreen_menu() {
 
 void N3dsInput::n3dsinput_handle_event() {
     hidScanInput();
-    u32 kDown = hidKeysDown();
-    u32 kUp = hidKeysUp();
+    const u32 kDown = hidKeysDown();
+    const u32 kUp = hidKeysUp();
     previous_state = gamepad_state;
 
     touch_handler->n3dsinput_handle_touch(kDown, kUp);
+
+    // HOME opens the local Quick Actions surface. It never needs to be sent to
+    // the remote host.
+    if (aptCheckHomePressRejected()) {
+        if (!menu_active) {
+            force_touchscreen_menu();
+            menu_active = true;
+        }
+    } else {
+        menu_active = false;
+    }
+
+    circlePosition cpad_pos{};
+    circlePosition cstick_pos{};
+    hidCircleRead(&cpad_pos);
+    hidCstickRead(&cstick_pos);
+
+    touch_handler->n3dsinput_handle_navigation(kDown, cpad_pos, cstick_pos);
+
+    // Quick Actions and Performance are local 3DS surfaces. While one is
+    // active, neutralize the remote controller once and capture all buttons /
+    // analog navigation locally so menu actions cannot move the remote game.
+    if (touch_handler->captures_gamepad_input()) {
+        if (use_triggers_for_mouse) {
+            if (previous_state.leftTrigger != 0) {
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_LEFT);
+            }
+            if (previous_state.rightTrigger != 0) {
+                LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, BUTTON_RIGHT);
+            }
+        }
+
+        gamepad_state.buttons = 0;
+        gamepad_state.leftTrigger = 0;
+        gamepad_state.rightTrigger = 0;
+        gamepad_state.leftStickX = 0;
+        gamepad_state.leftStickY = 0;
+        gamepad_state.rightStickX = 0;
+        gamepad_state.rightStickY = 0;
+
+        if (_gamepad_state_changed()) {
+            LiSendMultiControllerEvent(CONTROLLER_NUMBER, ACTIVE_GAMEPAD_MASK,
+                                       0, 0, 0, 0, 0, 0, 0);
+        }
+        return;
+    }
 
     if (kDown & ~KEY_TOUCH) {
         gamepad_state.buttons |= _n3ds_to_li_buttons(kDown);
@@ -194,24 +238,8 @@ void N3dsInput::n3dsinput_handle_event() {
         gamepad_state.rightTrigger &= ~n3ds_to_li_trigger(kUp, CUSTOM_KEY_ZR);
     }
 
-    // Use the HOME button to open the menu
-    if (aptCheckHomePressRejected()) {
-        if (!menu_active) {
-            force_touchscreen_menu();
-            menu_active = true;
-        }
-        return;
-    } else {
-        menu_active = false;
-    }
-
-    circlePosition cpad_pos;
-    hidCircleRead(&cpad_pos);
     gamepad_state.leftStickX = scale_n3ds_axis(cpad_pos.dx, N3DS_ANALOG_MAX);
     gamepad_state.leftStickY = scale_n3ds_axis(cpad_pos.dy, N3DS_ANALOG_MAX);
-
-    circlePosition cstick_pos;
-    hidCstickRead(&cstick_pos);
     gamepad_state.rightStickX =
         scale_n3ds_axis(cstick_pos.dx, N3DS_C_STICK_MAX);
     gamepad_state.rightStickY =
@@ -271,6 +299,4 @@ void N3dsInput::n3dsinput_handle_event() {
                                         gamepad_state.gyro_rate_z);
         }
     }
-
-    return;
 }
