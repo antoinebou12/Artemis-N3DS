@@ -15,6 +15,11 @@ struct UiMenuResult {
     int index = -1;
 };
 
+enum class UiDetailsAction {
+    Back,
+    Retry,
+};
+
 bool n3ds_ui_init();
 void n3ds_ui_shutdown();
 bool n3ds_ui_active();
@@ -25,6 +30,14 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                           int selected_index,
                           const std::string &secondary_label = "",
                           bool allow_refresh = false);
+
+// Scrollable details/error surface. The top screen owns the diagnostic text;
+// the bottom screen owns touch/joystick scrolling and Back/Save/Retry actions.
+UiDetailsAction n3ds_ui_details(const std::string &title,
+                               const std::string &message,
+                               const std::string &subtitle = "",
+                               bool allow_retry = false,
+                               const std::string &retry_label = "Retry");
 
 void n3ds_ui_message(const std::string &title, const std::string &message,
                      const std::string &hint = "Press B to go back");
