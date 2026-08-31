@@ -3,3 +3,7 @@ build/
 *.cia
 *.elf
 *.smdh
+
+!dist/
+!dist/*.cia
+!dist/*.3dsx

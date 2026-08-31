@@ -58,7 +58,10 @@ make
 
 ## Install
 
-You can download the CIA file (moonlight.cia) from the [Releases](https://github.com/zoeyjodon/moonlight-N3DS/releases/latest) page, and install it using [FBI](https://github.com/Steveice10/FBI).
+The ready-to-install packages are in [`dist/`](dist/): `moonlight.cia` installs
+to the HOME Menu, while `moonlight.3dsx` can be launched with the Homebrew
+Launcher. Follow the [CIA installation guide](dist/INSTALL.md) for the FBI
+steps.
 
 Please note that to run Moonlight on the 3DS, you will need to install custom firmware. You can find instructions for installing CFW [here](https://3ds.hacks.guide/).
 
