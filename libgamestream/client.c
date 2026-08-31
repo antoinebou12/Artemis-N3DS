@@ -655,8 +655,16 @@ int gs_pair(PSERVER_DATA server, char* pin) {
   server->paired = true;
 
   cleanup:
-  if (ret != GS_OK)
+  if (ret != GS_OK) {
+    // A cancellation must still release any partial pair state on the host,
+    // but the cleanup request itself must not inherit the cancelled transfer.
+    bool cancelled = ret == GS_CANCELLED;
+    if (cancelled)
+      http_set_cancel_callback(NULL, NULL);
     gs_unpair(server);
+    if (cancelled)
+      gs_error = "Pairing cancelled";
+  }
 
   free(url);
   free(plaincert);

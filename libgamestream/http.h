@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <stdbool.h>
 #include <stdlib.h>
 
 #define CERTIFICATE_FILE_NAME "client.pem"
@@ -33,6 +34,8 @@ typedef struct _HTTP_DATA {
     size_t size;
 } HTTP_DATA, *PHTTP_DATA;
 
+typedef bool (*http_cancel_callback_t)(void *context);
+
 int http_init(const char *keyDirectory, int logLevel);
 PHTTP_DATA http_create_data();
 int http_request(char *url, PHTTP_DATA data);
@@ -40,6 +43,7 @@ void http_cleanup();
 void http_free_data(PHTTP_DATA data);
 void http_set_timeout_s(uint32_t connection_timeout_in);
 void http_set_log_level(int log_level_in);
+void http_set_cancel_callback(http_cancel_callback_t callback, void *context);
 
 #ifdef __cplusplus
 }

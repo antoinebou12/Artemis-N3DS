@@ -27,6 +27,8 @@
 static CURL *curl = NULL;
 static uint32_t connection_timeout_s = 60;
 static int log_level = 0;
+static http_cancel_callback_t cancel_callback = NULL;
+static void *cancel_context = NULL;
 
 static long connect_timeout_seconds(void) {
     // Connection establishment should fail quickly on a handheld LAN client.
@@ -61,6 +63,17 @@ static size_t _write_curl(void *contents, size_t size, size_t nmemb,
     return realsize;
 }
 
+static int _cancel_curl(void *context, curl_off_t download_total,
+                        curl_off_t download_now, curl_off_t upload_total,
+                        curl_off_t upload_now) {
+    (void)context;
+    (void)download_total;
+    (void)download_now;
+    (void)upload_total;
+    (void)upload_now;
+    return cancel_callback != NULL && cancel_callback(cancel_context) ? 1 : 0;
+}
+
 int http_init(const char *keyDirectory, int logLevel) {
     // gs_init() may be called repeatedly when refreshing a host. Ensure we do
     // not leak or stack easy handles between sessions.
@@ -91,6 +104,9 @@ int http_init(const char *keyDirectory, int logLevel) {
     curl_easy_setopt(curl, CURLOPT_SSLKEY, keyFilePath);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, _write_curl);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, _cancel_curl);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, NULL);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_SESSIONID_CACHE, 0L);
 
@@ -130,6 +146,11 @@ void http_set_log_level(int log_level_in) {
     apply_runtime_options();
 }
 
+void http_set_cancel_callback(http_cancel_callback_t callback, void *context) {
+    cancel_callback = callback;
+    cancel_context = context;
+}
+
 int http_request(char *url, PHTTP_DATA data) {
     if (curl == NULL) {
         gs_error = "HTTP client is not initialized";
@@ -162,6 +183,10 @@ int http_request(char *url, PHTTP_DATA data) {
     CURLcode res = curl_easy_perform(curl);
 
     if (res != CURLE_OK) {
+        if (res == CURLE_ABORTED_BY_CALLBACK) {
+            gs_error = "Cancelled";
+            return GS_CANCELLED;
+        }
         gs_error = curl_easy_strerror(res);
         return GS_FAILED;
     } else if (data->memory == NULL) {

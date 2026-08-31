@@ -18,6 +18,7 @@
  */
 
 #include "N3dsRenderer.hpp"
+#include "../../graphics_lifecycle.hpp"
 #include "vshader_shbin.h"
 
 #include <3ds.h>
@@ -51,6 +52,7 @@ N3dsRendererBase::N3dsRendererBase(gfxScreen_t screen_in, int surface_width_in,
                          ? texture_height_override
                          : moon_video_texture_height(image_height_in)),
       px_size(pixel_size), debug(debug_in) {
+    n3ds_graphics_acquire_stream();
     cmdlist = (u32 *)linearAlloc(CMDLIST_SZ * 4);
     vramFb = vramAlloc(surface_width * surface_height * px_size);
     vramTex = vramAlloc(texture_width * texture_height * px_size);

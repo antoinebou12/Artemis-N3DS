@@ -28,6 +28,7 @@ test-host:
 		-Isrc \
 		tests/foundation_smoke.cpp \
 		src/presentation_state.cpp \
+		src/stream_profile_catalog.cpp \
 		src/stream_telemetry.cpp \
 		-o $(HOST_TEST_BIN)
 	$(HOST_TEST_BIN)

@@ -1,10 +1,10 @@
 #include "n3ds_ui.hpp"
 
+#include "graphics_lifecycle.hpp"
 #include "system/pair_record.hpp"
 
 #include <3ds.h>
 #include <citro2d.h>
-#include <citro3d.h>
 
 #include <algorithm>
 #include <cctype>
@@ -16,11 +16,6 @@
 #include <vector>
 
 namespace {
-bool g_active = false;
-C3D_RenderTarget *g_top = nullptr;
-C3D_RenderTarget *g_bottom = nullptr;
-C2D_TextBuf g_text_buffer = nullptr;
-
 constexpr u32 kBackground = C2D_Color32(13, 17, 23, 255);
 constexpr u32 kSurface = C2D_Color32(29, 35, 44, 255);
 constexpr u32 kSurfaceSelected = C2D_Color32(43, 54, 68, 255);
@@ -28,8 +23,8 @@ constexpr u32 kSurfaceRaised = C2D_Color32(35, 42, 52, 255);
 constexpr u32 kAccent = C2D_Color32(72, 171, 255, 255);
 constexpr u32 kAccentSoft = C2D_Color32(30, 72, 105, 255);
 constexpr u32 kSuccess = C2D_Color32(79, 201, 126, 255);
-constexpr u32 kText = C2D_Color32(240, 244, 248, 255);
-constexpr u32 kMuted = C2D_Color32(155, 166, 179, 255);
+constexpr u32 kText = C2D_Color32(250, 252, 255, 255);
+constexpr u32 kMuted = C2D_Color32(184, 195, 208, 255);
 constexpr u32 kDisabled = C2D_Color32(84, 92, 104, 255);
 constexpr u32 kDarkText = C2D_Color32(10, 22, 34, 255);
 
@@ -111,24 +106,32 @@ std::string trim_copy(const std::string &value) {
 
 void draw_text(const std::string &value, float x, float y, float scale,
                u32 color, float wrap_width = 0.0f) {
-    if (g_text_buffer == nullptr || value.empty()) {
+    C2D_TextBuf text_buffer = n3ds_graphics_text_buffer();
+    if (text_buffer == nullptr || value.empty()) {
         return;
     }
 
     const std::string safe_value = bounded_text(value);
     C2D_Text text;
-    if (C2D_TextParse(&text, g_text_buffer, safe_value.c_str()) == nullptr) {
+    if (C2D_TextParse(&text, text_buffer, safe_value.c_str()) == nullptr) {
         return;
     }
     C2D_TextOptimize(&text);
 
+    // The shell is rendered at the LCD's native resolution. Snapping glyph
+    // origins avoids sampling between physical pixels, which is most visible
+    // on the small labels used by the bottom-screen menu.
+    const float snapped_x = std::round(x);
+    const float snapped_y = std::round(y);
+
     u32 flags = C2D_WithColor;
     if (wrap_width > 0.0f) {
         flags |= C2D_WordWrap;
-        C2D_DrawText(&text, flags, x, y, 0.5f, scale, scale, color,
-                     wrap_width);
+        C2D_DrawText(&text, flags, snapped_x, snapped_y, 0.5f, scale, scale,
+                     color, wrap_width);
     } else {
-        C2D_DrawText(&text, flags, x, y, 0.5f, scale, scale, color);
+        C2D_DrawText(&text, flags, snapped_x, snapped_y, 0.5f, scale, scale,
+                     color);
     }
 }
 
@@ -286,17 +289,17 @@ void draw_bottom_touch_menu(const std::string &title,
 }
 
 void begin_frame() {
-    if (!g_active) {
+    if (!n3ds_graphics_shell_active()) {
         return;
     }
-    C2D_TextBufClear(g_text_buffer);
+    C2D_TextBufClear(n3ds_graphics_text_buffer());
     C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-    C2D_TargetClear(g_top, kBackground);
-    C2D_TargetClear(g_bottom, kBackground);
+    C2D_TargetClear(n3ds_graphics_top_target(), kBackground);
+    C2D_TargetClear(n3ds_graphics_bottom_target(), kBackground);
 }
 
 void end_frame() {
-    if (g_active) {
+    if (n3ds_graphics_shell_active()) {
         C3D_FrameEnd(0);
     }
 }
@@ -307,11 +310,11 @@ void draw_menu_frame(const std::string &title, const std::string &subtitle,
                      bool allow_refresh) {
     begin_frame();
 
-    C2D_SceneBegin(g_top);
+    C2D_SceneBegin(n3ds_graphics_top_target());
     draw_header(title, subtitle);
     draw_top_context(items, selected);
 
-    C2D_SceneBegin(g_bottom);
+    C2D_SceneBegin(n3ds_graphics_bottom_target());
     draw_bottom_touch_menu(title, items, selected, secondary_label,
                            allow_refresh);
 
@@ -520,7 +523,7 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
                         const std::string &status) {
     begin_frame();
 
-    C2D_SceneBegin(g_top);
+    C2D_SceneBegin(n3ds_graphics_top_target());
     draw_header(title, subtitle.empty() ? "Scrollable details" : subtitle);
     C2D_DrawRectSolid(18.0f, 86.0f, 0.3f, 364.0f, 140.0f, kSurface);
     C2D_DrawRectSolid(18.0f, 86.0f, 0.45f, 4.0f, 140.0f, kAccent);
@@ -554,7 +557,7 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
                           3.0f, thumb_h, kAccent);
     }
 
-    C2D_SceneBegin(g_bottom);
+    C2D_SceneBegin(n3ds_graphics_bottom_target());
     draw_text("Details & diagnostics", 12.0f, 10.0f, 0.48f, kText);
     draw_pill("SCROLL", 247.0f, 8.0f, 63.0f, kAccentSoft, kAccent);
     draw_text("Swipe vertically or use Circle Pad / C-Stick", 12.0f, 39.0f,
@@ -611,68 +614,14 @@ int details_action_at(const touchPosition &touch) {
 } // namespace
 
 bool n3ds_ui_init() {
-    if (g_active) {
-        return true;
-    }
-
-    gfxSetDoubleBuffering(GFX_TOP, true);
-    gfxSetDoubleBuffering(GFX_BOTTOM, true);
-
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) {
-        gfxSetDoubleBuffering(GFX_TOP, false);
-        gfxSetDoubleBuffering(GFX_BOTTOM, false);
-        return false;
-    }
-    if (!C2D_Init(C2D_DEFAULT_MAX_OBJECTS)) {
-        C3D_Fini();
-        gfxSetDoubleBuffering(GFX_TOP, false);
-        gfxSetDoubleBuffering(GFX_BOTTOM, false);
-        return false;
-    }
-
-    C2D_Prepare();
-    g_top = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
-    g_bottom = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
-    g_text_buffer = C2D_TextBufNew(8192);
-
-    if (g_top == nullptr || g_bottom == nullptr || g_text_buffer == nullptr) {
-        g_active = true;
-        n3ds_ui_shutdown();
-        return false;
-    }
-
-    g_active = true;
-    return true;
+    return n3ds_graphics_acquire_shell();
 }
 
 void n3ds_ui_shutdown() {
-    if (!g_active && g_top == nullptr && g_bottom == nullptr &&
-        g_text_buffer == nullptr) {
-        return;
-    }
-
-    if (g_text_buffer != nullptr) {
-        C2D_TextBufDelete(g_text_buffer);
-        g_text_buffer = nullptr;
-    }
-    if (g_top != nullptr) {
-        C3D_RenderTargetDelete(g_top);
-        g_top = nullptr;
-    }
-    if (g_bottom != nullptr) {
-        C3D_RenderTargetDelete(g_bottom);
-        g_bottom = nullptr;
-    }
-
-    C2D_Fini();
-    C3D_Fini();
-
-    gfxSetDoubleBuffering(GFX_TOP, false);
-    gfxSetDoubleBuffering(GFX_BOTTOM, false);
-    g_active = false;
+    n3ds_graphics_acquire_stream();
 }
 
-bool n3ds_ui_active() { return g_active; }
+bool n3ds_ui_active() { return n3ds_graphics_shell_active(); }
 
 UiMenuResult n3ds_ui_menu(const std::string &title,
                           const std::string &subtitle,
@@ -681,7 +630,7 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                           const std::string &secondary_label,
                           bool allow_refresh) {
     UiMenuResult result{};
-    if (!g_active) {
+    if (!n3ds_graphics_shell_active()) {
         return result;
     }
 
@@ -855,7 +804,7 @@ UiDetailsAction n3ds_ui_details(const std::string &title,
                                const std::string &subtitle,
                                bool allow_retry,
                                const std::string &retry_label) {
-    if (!g_active) {
+    if (!n3ds_graphics_shell_active()) {
         return UiDetailsAction::Back;
     }
 
@@ -983,12 +932,12 @@ void n3ds_ui_message(const std::string &title, const std::string &message,
 void n3ds_ui_status(const std::string &title, const std::string &subtitle,
                     const std::vector<std::string> &lines,
                     const std::string &hint) {
-    if (!g_active) {
+    if (!n3ds_graphics_shell_active()) {
         return;
     }
 
     begin_frame();
-    C2D_SceneBegin(g_top);
+    C2D_SceneBegin(n3ds_graphics_top_target());
     draw_header(title, subtitle);
     float y = 88.0f;
     for (const auto &line : lines) {
@@ -1001,7 +950,7 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
         }
     }
 
-    C2D_SceneBegin(g_bottom);
+    C2D_SceneBegin(n3ds_graphics_bottom_target());
     draw_text("Artemis 3DS", 14.0f, 12.0f, 0.50f, kText);
     draw_pill("WORKING", 14.0f, 43.0f, 72.0f, kAccentSoft, kAccent);
     draw_text(hint, 14.0f, 83.0f, 0.39f, kMuted, 290.0f);

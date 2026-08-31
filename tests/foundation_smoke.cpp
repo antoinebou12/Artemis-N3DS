@@ -1,4 +1,6 @@
+#include "graphics_lifecycle_state.hpp"
 #include "presentation_state.hpp"
+#include "stream_profile.hpp"
 #include "stream_telemetry.hpp"
 #include "video/video_layout.hpp"
 
@@ -11,6 +13,19 @@ static bool nearly_equal(float a, float b, float epsilon = 0.001f) {
 }
 
 int main() {
+    GraphicsLifecycleState graphics;
+    assert(graphics.mode() == GraphicsMode::Dormant);
+    assert(graphics.acquire_shell());
+    assert(graphics.shell_active());
+    assert(!graphics.acquire_shell());
+    assert(graphics.acquire_stream());
+    assert(graphics.mode() == GraphicsMode::Stream);
+    assert(!graphics.acquire_stream());
+    assert(graphics.acquire_shell());
+    assert(graphics.shutdown());
+    assert(graphics.mode() == GraphicsMode::Dormant);
+    assert(!graphics.shutdown());
+
     PresentationState presentation;
     presentation.zoom = 8.0f;
     presentation.pan_x = -2.0f;
@@ -22,6 +37,16 @@ int main() {
     assert(nearly_equal(presentation.pan_y, 1.0f));
     assert(std::strcmp(presentation_mode_name(PresentationMode::StereoSideBySide),
                        "Stereo SBS") == 0);
+
+    const auto *balanced = find_stream_profile("Balanced");
+    assert(balanced != nullptr);
+    assert(std::strcmp(stream_profile_hint(*balanced), "Reliable 3D quality") ==
+           0);
+    assert(stream_profile_matches(*balanced, 800, 480, 30, 1500,
+                                  PresentationMode::Stretch));
+    assert(!stream_profile_matches(*balanced, 800, 480, 60, 1500,
+                                   PresentationMode::Stretch));
+    assert(find_stream_profile("Missing") == nullptr);
 
     PresentationState fit;
     fit.mode = PresentationMode::Fit;
@@ -54,6 +79,12 @@ int main() {
     // Adaptive video backing surfaces keep PICA's power-of-two requirement but
     // stop moving a 1024x512 texture for every small 3DS stream.
     assert(moon_video_texture_width(400) == 512);
+    assert(moon_video_resolution_is_supported(400, 240));
+    assert(moon_video_resolution_is_supported(800, 480));
+    assert(moon_video_resolution_is_supported(1024, 512));
+    assert(!moon_video_resolution_is_supported(0, 240));
+    assert(!moon_video_resolution_is_supported(1025, 512));
+    assert(!moon_video_resolution_is_supported(1024, 513));
     assert(moon_video_texture_height(240) == 256);
     assert(moon_video_texture_width(800) == 1024);
     assert(moon_video_texture_height(240) == 256);

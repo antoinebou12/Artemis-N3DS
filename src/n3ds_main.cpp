@@ -19,6 +19,7 @@
 #include "host_discovery.hpp"
 #include "input/n3ds_input.hpp"
 #include "n3ds_ui.hpp"
+#include "graphics_lifecycle.hpp"
 #include "presentation_state.hpp"
 #include "stream_profile.hpp"
 #include "stream_telemetry_store.hpp"
@@ -26,6 +27,7 @@
 #include "system/n3ds_connection.hpp"
 #include "system/pair_record.hpp"
 #include "video/video.hpp"
+#include "video/video_layout.hpp"
 
 #include <3ds.h>
 #include <Limelight.h>
@@ -66,6 +68,30 @@ const char *bool_text(bool value) { return value ? "On" : "Off"; }
 
 std::string current_profile_name(PCONFIGURATION config) {
     return config->profile != nullptr ? config->profile : "Custom";
+}
+
+void mark_stream_profile_custom(PCONFIGURATION config) {
+    config->profile = nullptr;
+}
+
+bool is_new_3ds_model() {
+    bool is_new_3ds = false;
+    APT_CheckNew3DS(&is_new_3ds);
+    return is_new_3ds;
+}
+
+std::string stream_model_guidance() {
+    return is_new_3ds_model()
+               ? "New 3DS: hardware decoding supports higher presets"
+               : "Original/XL: 400x240 at 30 FPS is recommended";
+}
+
+std::string stream_summary(PCONFIGURATION config) {
+    return current_profile_name(config) + "   " +
+           std::to_string(config->stream.width) + "x" +
+           std::to_string(config->stream.height) + " " +
+           std::to_string(config->stream.fps) + " FPS   " +
+           std::to_string(config->stream.bitrate) + " kbps";
 }
 
 void fallback_wait_for_button(const std::string &message) {
@@ -348,9 +374,11 @@ void choose_profile(PCONFIGURATION config, const SelectedHost &host) {
         const auto &profile = profiles[i];
         std::string row = profile.name;
         row += "   " + std::to_string(profile.width) + "x" +
-               std::to_string(profile.height);
-        row += "   " + std::to_string(profile.fps) + " FPS";
-        row += "   " + std::to_string(profile.bitrate_kbps) + " kbps";
+               std::to_string(profile.height) + " " +
+               std::to_string(profile.fps) + "F " +
+               std::to_string(profile.bitrate_kbps / 1000) + "M";
+        row += "   ";
+        row += stream_profile_hint(profile);
         items.push_back(row);
         if (config->profile != nullptr &&
             strcmp(config->profile, profile.name) == 0) {
@@ -358,7 +386,7 @@ void choose_profile(PCONFIGURATION config, const SelectedHost &host) {
         }
     }
 
-    const auto result = show_menu("Stream Profile", "Optimized 3DS presets",
+    const auto result = show_menu("Stream Profile", stream_model_guidance(),
                                   items, selected);
     if (result.action != UiMenuAction::Select || result.index < 0) {
         return;
@@ -419,16 +447,19 @@ void choose_presentation(PCONFIGURATION config, const SelectedHost &host) {
 
 void choose_resolution(PCONFIGURATION config) {
     const std::vector<std::string> items = {
-        "400x240   Native logical resolution",
-        "800x480   High-detail 2D stream",
-        "800x240   Side-by-side stereo source",
+        "400x240   All-model compatibility",
+        "800x480   High-detail 2D (New 3DS)",
+        "800x240   Side-by-side stereo (New 3DS)",
         "Custom...",
     };
-    const auto result = show_menu("Resolution", "3DS-friendly modes", items);
+    const auto result = show_menu(
+        "Resolution", "Stream input limit: 1024x512", items);
     if (result.action != UiMenuAction::Select) {
         return;
     }
 
+    const int previous_width = config->stream.width;
+    const int previous_height = config->stream.height;
     switch (result.index) {
     case 0:
         config->stream.width = 400;
@@ -444,13 +475,26 @@ void choose_resolution(PCONFIGURATION config) {
         set_global_presentation_state(
             {PresentationMode::StereoSideBySide, 1.0f, 0.0f, 0.0f, true});
         break;
-    case 3:
-        config->stream.width = prompt_int("Stream width", config->stream.width);
-        config->stream.height =
-            prompt_int("Stream height", config->stream.height);
+    case 3: {
+        const int width = prompt_int("Stream width", config->stream.width);
+        const int height = prompt_int("Stream height", config->stream.height);
+        if (!moon_video_resolution_is_supported(width, height)) {
+            show_message("Unsupported Resolution",
+                         "Enter a width from 1 to 1024 and a height from 1 "
+                         "to 512.");
+            return;
+        }
+        config->stream.width = width;
+        config->stream.height = height;
         break;
+    }
     default:
         break;
+    }
+
+    if (config->stream.width != previous_width ||
+        config->stream.height != previous_height) {
+        mark_stream_profile_custom(config);
     }
 }
 
@@ -462,11 +506,15 @@ void choose_fps(PCONFIGURATION config) {
     if (result.action != UiMenuAction::Select) {
         return;
     }
+    const int previous_fps = config->stream.fps;
     if (result.index == 3) {
         config->stream.fps = prompt_int("Frames per second", config->stream.fps);
     } else if (result.index >= 0 && result.index <= 2) {
         const int values[] = {30, 40, 60};
         config->stream.fps = values[result.index];
+    }
+    if (config->stream.fps != previous_fps) {
+        mark_stream_profile_custom(config);
     }
 }
 
@@ -483,11 +531,15 @@ void choose_bitrate(PCONFIGURATION config) {
     if (result.action != UiMenuAction::Select) {
         return;
     }
+    const int previous_bitrate = config->stream.bitrate;
     if (result.index == (int)items.size() - 1) {
         config->stream.bitrate =
             prompt_int("Bitrate in kbps", config->stream.bitrate);
     } else if (result.index >= 0 && result.index < 6) {
         config->stream.bitrate = values[result.index];
+    }
+    if (config->stream.bitrate != previous_bitrate) {
+        mark_stream_profile_custom(config);
     }
 }
 
@@ -500,7 +552,11 @@ void choose_decoder(PCONFIGURATION config) {
     const auto result = show_menu("Video Decoder", "Hardware MVD is fastest",
                                   items, (int)config->video_decoder);
     if (result.action == UiMenuAction::Select && result.index >= 0) {
+        const auto previous_decoder = config->video_decoder;
         config->video_decoder = (VIDEO_DECODER_TYPE)result.index;
+        if (config->video_decoder != previous_decoder) {
+            mark_stream_profile_custom(config);
+        }
     }
 }
 
@@ -758,6 +814,24 @@ static inline void stream_loop(PCONFIGURATION config,
 
 bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
                   const RemoteApp &app) {
+    if (!moon_video_resolution_is_supported(config->stream.width,
+                                            config->stream.height)) {
+        show_message("Unsupported Resolution",
+                     "This renderer accepts stream input from 1x1 up to "
+                     "1024x512. Change Video Tuning before starting.");
+        return false;
+    }
+
+    const bool use_hardware_decoder =
+        config->video_decoder == HARDWARE_VIDEO_DECODER && is_new_3ds_model();
+    if (config->video_decoder == HARDWARE_VIDEO_DECODER &&
+        !use_hardware_decoder) {
+        show_message("Software Decoder Selected",
+                     "Original Nintendo 3DS and 3DS XL use software video "
+                     "decoding. For reliable performance, start with the "
+                     "Low Latency preset.");
+    }
+
     n3ds_ui_status("Starting Stream", app.name,
                    {std::to_string(config->stream.width) + "x" +
                         std::to_string(config->stream.height) + " at " +
@@ -782,7 +856,8 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
     PDECODER_RENDERER_CALLBACKS video_callbacks = &decoder_callbacks_mock;
     switch (config->video_decoder) {
     case VIDEO_DECODER_TYPE::HARDWARE_VIDEO_DECODER:
-        video_callbacks = &decoder_callbacks_n3ds_mvd;
+        video_callbacks = use_hardware_decoder ? &decoder_callbacks_n3ds_mvd
+                                                : &decoder_callbacks_n3ds;
         break;
     case VIDEO_DECODER_TYPE::SOFTWARE_VIDEO_DECODER:
         video_callbacks = &decoder_callbacks_n3ds;
@@ -837,6 +912,50 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
     return true;
 }
 
+bool stream_setup(PCONFIGURATION config, const SelectedHost &host,
+                  const RemoteApp &app) {
+    int selected = 0;
+    while (aptMainLoop()) {
+        std::vector<std::string> items = {
+            "Start Stream      " + stream_summary(config),
+            "Choose Preset     " + current_profile_name(config),
+            "Video Tuning      " + std::to_string(config->stream.width) +
+                "x" + std::to_string(config->stream.height) + " " +
+                std::to_string(config->stream.fps) + " FPS",
+            std::string("Display Mode      ") +
+                presentation_mode_name(global_presentation_state().mode),
+        };
+
+        const auto result = show_menu("Stream Setup",
+                                      app.name + "   " + host.address, items,
+                                      selected);
+        selected = result.index;
+        if (result.action == UiMenuAction::Back) {
+            return false;
+        }
+        if (result.action != UiMenuAction::Select) {
+            continue;
+        }
+
+        switch (result.index) {
+        case 0:
+            return true;
+        case 1:
+            choose_profile(config, host);
+            break;
+        case 2:
+            video_settings(config);
+            break;
+        case 3:
+            choose_presentation(config, host);
+            break;
+        default:
+            break;
+        }
+    }
+    return false;
+}
+
 void app_browser(PCONFIGURATION config, PSERVER_DATA server,
                  const SelectedHost &host) {
     int selected = 0;
@@ -886,7 +1005,10 @@ void app_browser(PCONFIGURATION config, PSERVER_DATA server,
         }
         if (result.action == UiMenuAction::Select && result.index >= 0 &&
             result.index < (int)apps.size()) {
-            start_stream(server, config, apps[(size_t)result.index]);
+            const auto &app = apps[(size_t)result.index];
+            if (stream_setup(config, host, app)) {
+                start_stream(server, config, app);
+            }
             reload = true;
         }
     }
@@ -904,14 +1026,24 @@ void pair_host(PCONFIGURATION config, PSERVER_DATA server,
     n3ds_ui_status("Pair Host", host.address,
                    {std::string("PIN: ") + pin,
                     "Enter this PIN in the host web interface"},
-                   "Waiting for pairing approval...");
+                   "Waiting for approval... Press B to cancel");
 
+    http_set_cancel_callback(
+        [](void *) {
+            hidScanInput();
+            return (hidKeysDown() & KEY_B) != 0;
+        },
+        nullptr);
     const int result = gs_pair(server, pin);
+    http_set_cancel_callback(nullptr, nullptr);
     http_set_timeout_s(60);
 
     if (result == GS_OK) {
         add_pair_address(host.address, host.port);
         show_message("Pairing Complete", "The host is now paired with Artemis 3DS.");
+    } else if (result == GS_CANCELLED) {
+        show_message("Pairing Cancelled",
+                     "The pairing request was cancelled. No host was saved.");
     } else {
         show_message("Pairing Failed",
                      gs_error != nullptr ? gs_error : "Unknown pairing error");
@@ -1072,7 +1204,7 @@ void init_3ds() {
 }
 
 void n3ds_exit_handler() {
-    n3ds_ui_shutdown();
+    n3ds_graphics_shutdown();
     gs_cleanup();
     NDMU_UnlockState();
     NDMU_LeaveExclusiveState();

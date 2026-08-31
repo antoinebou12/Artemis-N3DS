@@ -18,6 +18,7 @@
  */
 
 #include "../system/dispatcher.hpp"
+#include "../graphics_lifecycle.hpp"
 #include "gamepad_bgr.h"
 #include "keyboard_bgr.h"
 #include "touchpad_bgr.h"
@@ -27,6 +28,7 @@
 #include <stdio.h>
 
 VideoDecoderBase::VideoDecoderBase(int width, int height) {
+    n3ds_graphics_acquire_stream();
     surface_height = GSP_SCREEN_WIDTH;
     surface_width = width > GSP_SCREEN_HEIGHT_TOP ? GSP_SCREEN_HEIGHT_TOP_2X
                                                   : GSP_SCREEN_HEIGHT_TOP;
