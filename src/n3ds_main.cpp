@@ -20,6 +20,7 @@
 #include "input/n3ds_input.hpp"
 #include "n3ds_ui.hpp"
 #include "graphics_lifecycle.hpp"
+#include "hardware_capabilities.hpp"
 #include "presentation_state.hpp"
 #include "stream_profile.hpp"
 #include "stream_telemetry_store.hpp"
@@ -74,14 +75,8 @@ void mark_stream_profile_custom(PCONFIGURATION config) {
     config->profile = nullptr;
 }
 
-bool is_new_3ds_model() {
-    bool is_new_3ds = false;
-    APT_CheckNew3DS(&is_new_3ds);
-    return is_new_3ds;
-}
-
 std::string stream_model_guidance() {
-    return is_new_3ds_model()
+    return moonlight_hardware_caps().new_3ds
                ? "New 3DS: hardware decoding supports higher presets"
                : "Original/XL: 400x240 at 30 FPS is recommended";
 }
@@ -785,7 +780,6 @@ static inline void dispatch_loop(void *_unused_) {
 static inline void input_loop(void *input_handler_in) {
     N3dsInput *input_handler = static_cast<N3dsInput *>(input_handler_in);
     auto connection_listener = N3dsConnectionListener::get_instance();
-    input_handler->force_touchscreen_menu();
     while (!connection_listener->is_connection_closed()) {
         gspWaitForAnyEvent();
         input_handler->n3dsinput_handle_event();
@@ -823,7 +817,8 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
     }
 
     const bool use_hardware_decoder =
-        config->video_decoder == HARDWARE_VIDEO_DECODER && is_new_3ds_model();
+        config->video_decoder == HARDWARE_VIDEO_DECODER &&
+        moonlight_hardware_caps().hardware_decoder;
     if (config->video_decoder == HARDWARE_VIDEO_DECODER &&
         !use_hardware_decoder) {
         show_message("Software Decoder Selected",

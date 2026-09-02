@@ -10,7 +10,13 @@ C2D_TextBuf g_text_buffer = nullptr;
 bool g_c3d_initialized = false;
 bool g_c2d_initialized = false;
 
+void wait_gpu_idle() {
+    gspWaitForP3D();
+    gspWaitForPPF();
+}
+
 void release_shell_resources() {
+    wait_gpu_idle();
     if (g_text_buffer != nullptr) {
         C2D_TextBufDelete(g_text_buffer);
         g_text_buffer = nullptr;
@@ -34,6 +40,7 @@ void release_shell_resources() {
 }
 
 void configure_stream_framebuffers() {
+    wait_gpu_idle();
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
     gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
     gfxSetDoubleBuffering(GFX_TOP, false);
@@ -47,6 +54,7 @@ bool n3ds_graphics_acquire_shell() {
     }
 
     release_shell_resources();
+    wait_gpu_idle();
     gfxSetScreenFormat(GFX_TOP, GSP_BGR8_OES);
     gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_TOP, true);

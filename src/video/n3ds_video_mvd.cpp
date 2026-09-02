@@ -18,6 +18,7 @@
  */
 
 #include "video.hpp"
+#include "../hardware_capabilities.hpp"
 #include "../stream_telemetry.hpp"
 #include "../stream_telemetry_store.hpp"
 
@@ -43,9 +44,7 @@ static inline float ticks_to_ms(u64 ticks) {
 MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
                        void *context, int drFlags)
     : VideoDecoderBase(width, height) {
-    bool is_new_3ds;
-    APT_CheckNew3DS(&is_new_3ds);
-    if (!is_new_3ds) {
+    if (!moonlight_hardware_caps().hardware_decoder) {
         fprintf(stderr, "Hardware decoding is only available on the New 3DS\n");
         throw std::runtime_error("Unsupported hardware");
     }

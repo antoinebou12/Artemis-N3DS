@@ -32,7 +32,7 @@ constexpr u64 kRepeat = static_cast<u64>(SYSCLOCK_ARM11) * 120 / 1000;
 const char *kButtonLabels[4][2] = {
     {"GAMEPAD", "MOUSEPAD"},
     {"KEYBOARD", "ABS TOUCH"},
-    {"DUAL SCREEN", "MAGNIFY"},
+    {"DS STRETCH", "MAGNIFY"},
     {"PERFORMANCE", "EXIT STREAM"},
 };
 
@@ -90,9 +90,9 @@ void MenuTouchHandler::redraw(bool force) {
     // screen is a local control surface and captures navigation while open.
     consoleSelect(&DebugTouchHandler::bottomScreen);
     consoleClear();
-    std::printf("ARTEMIS 3DS  |  STREAM CONTROLS\n");
-    std::printf("TOP SCREEN: LIVE STREAM\n");
-    std::printf("BOTTOM: LOCAL QUICK ACTIONS\n");
+    std::printf("ARTEMIS 3DS  |  QUICK ACTIONS\n");
+    std::printf("TOP: live stream (unchanged)\n");
+    std::printf("BOTTOM: this menu only\n");
     std::printf("----------------------------------------\n");
 
     for (int row = 0; row < 4; ++row) {
@@ -107,7 +107,7 @@ void MenuTouchHandler::redraw(bool force) {
     }
 
     std::printf("\nCircle/C-Stick/D-pad: move   A: open\n");
-    std::printf("B: resume gamepad            Touch: open\n");
+    std::printf("HOME: this menu   B: gamepad overlay\n");
     std::printf("Local menu input is not sent to the PC.\n");
 }
 
