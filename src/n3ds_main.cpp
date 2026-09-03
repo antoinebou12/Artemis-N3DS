@@ -270,10 +270,9 @@ SelectedHost select_host(PCONFIGURATION config) {
 
     auto refresh = [&]() {
         if (n3ds_ui_active()) {
-            n3ds_ui_status("Hosts", "Searching the local network...",
-                           {"Scanning GameStream port 47989",
-                            "Saved paired hosts are included automatically"},
-                           "This normally takes about a second");
+            n3ds_ui_status("Hosts", "Scanning LAN...",
+                           {"Port 47989", "Including saved hosts"},
+                           "~1 second");
         }
         hosts = discover_moonlight_hosts();
         selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
@@ -1142,8 +1141,8 @@ void pair_host(PCONFIGURATION config, PSERVER_DATA server,
 
 bool connect_host(PCONFIGURATION config, PSERVER_DATA server,
                   const SelectedHost &host) {
-    n3ds_ui_status("Connecting", host.address,
-                   {"Opening GameStream session..."}, "Please wait");
+    n3ds_ui_status("Connecting", host.address, {"Opening session..."},
+                   "Please wait");
 
     gs_cleanup();
     config->address = const_cast<char *>(host.address.c_str());

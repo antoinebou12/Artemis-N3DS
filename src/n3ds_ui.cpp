@@ -46,12 +46,12 @@ constexpr int kDetailsVisibleLines = 6;
 constexpr std::size_t kDetailsWrapChars = 55;
 
 // Citro2D's built-in font stays crisp only on half-integer scales. Keep all UI
-// typography on this ladder instead of ad-hoc values like 0.37 or 0.69.
+// typography on this ladder — sizes match the pre-regression shell UI.
 constexpr float kFontMicro = 0.50f;
-constexpr float kFontSmall = 0.75f;
-constexpr float kFontBody = 1.00f;
-constexpr float kFontTitle = 1.25f;
-constexpr float kFontHero = 1.50f;
+constexpr float kFontSmall = 0.50f;
+constexpr float kFontBody = 0.50f;
+constexpr float kFontTitle = 0.50f;
+constexpr float kFontHero = 0.75f;
 
 float crisp_scale(float scale) {
     return std::max(kFontMicro, std::round(scale * 2.0f) / 2.0f);
@@ -172,10 +172,10 @@ void draw_pill(const std::string &label, float x, float y, float width,
 }
 
 void draw_header(const std::string &title, const std::string &subtitle) {
-    draw_text("ARTEMIS 3DS", 18.0f, 8.0f, kFontMicro, kAccent);
-    draw_text(ellipsize(title, 34), 18.0f, 24.0f, kFontHero, kText);
+    draw_text("ARTEMIS 3DS", 18.0f, 10.0f, kFontMicro, kAccent);
+    draw_text(ellipsize(title, 34), 18.0f, 27.0f, kFontHero, kText);
     if (!subtitle.empty()) {
-        draw_text(ellipsize(subtitle, 66), 18.0f, 50.0f, kFontSmall, kMuted);
+        draw_text(ellipsize(subtitle, 66), 19.0f, 54.0f, kFontSmall, kMuted);
     }
     C2D_DrawRectSolid(18.0f, 72.0f, 0.4f, 364.0f, 2.0f, kAccent);
 }
@@ -191,9 +191,8 @@ void draw_top_context(const std::vector<std::string> &items, int selected) {
     if (items.empty()) {
         C2D_DrawRectSolid(18.0f, 88.0f, 0.3f, 364.0f, 104.0f, kSurface);
         draw_pill("EMPTY", 32.0f, 101.0f, 56.0f, kAccentSoft, kAccent);
-        draw_text("Add or refresh on bottom", 32.0f, 126.0f, kFontBody, kText);
-        draw_text("Use Refresh or Add Host on the touch screen.",
-                  32.0f, 154.0f, kFontSmall, kMuted, 330.0f);
+        draw_text("No hosts yet", 32.0f, 130.0f, kFontSmall, kText);
+        draw_text("Use bottom screen", 32.0f, 154.0f, kFontMicro, kMuted);
         return;
     }
 
@@ -256,9 +255,9 @@ void draw_bottom_touch_menu(const std::string &title,
                             int selected,
                             const std::string &secondary_label,
                             bool allow_refresh) {
-    draw_text(ellipsize(title, 25), 10.0f, 6.0f, kFontTitle, kText);
+    draw_text(ellipsize(title, 25), 10.0f, 8.0f, kFontTitle, kText);
     draw_pill("TOUCH", 252.0f, 6.0f, 58.0f, kAccentSoft, kAccent);
-    draw_text("Tap / stick to move", 10.0f, 32.0f, kFontMicro, kMuted);
+    draw_text("Tap / stick to move", 10.0f, 34.0f, kFontMicro, kMuted);
 
     if (!items.empty()) {
         const int safe_selected =
@@ -288,9 +287,9 @@ void draw_bottom_touch_menu(const std::string &title,
         }
     } else {
         C2D_DrawRectSolid(7.0f, kTouchRowsY, 0.3f, 306.0f, 58.0f, kSurface);
-        draw_text("Add or refresh on bottom", 18.0f, kTouchRowsY + 8.0f,
-                  kFontSmall, kText);
-        draw_text("Use Refresh or Add Host", 18.0f, kTouchRowsY + 30.0f,
+        draw_text(ellipsize("Refresh or Add below", 22), 18.0f,
+                  kTouchRowsY + 10.0f, kFontSmall, kText);
+        draw_text("Use Refresh or Add Host", 18.0f, kTouchRowsY + 34.0f,
                   kFontMicro, kMuted);
     }
 
@@ -952,7 +951,7 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     for (const auto &line : lines) {
         C2D_DrawRectSolid(18.0f, y, 0.3f, 364.0f, 27.0f, kSurface);
         C2D_DrawRectSolid(18.0f, y, 0.45f, 4.0f, 27.0f, kAccent);
-        draw_text(ellipsize(line, 62), 30.0f, y + 4.0f, kFontSmall, kText);
+        draw_text(ellipsize(line, 40), 30.0f, y + 5.0f, kFontSmall, kText);
         y += 31.0f;
         if (y > 220.0f) {
             break;
@@ -960,11 +959,11 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     }
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
-    draw_text("Artemis 3DS", 14.0f, 10.0f, kFontBody, kText);
+    draw_text("Artemis 3DS", 14.0f, 12.0f, kFontBody, kText);
     draw_pill("WORKING", 14.0f, 41.0f, 72.0f, kAccentSoft, kAccent);
-    draw_text(hint, 14.0f, 80.0f, kFontSmall, kMuted, 290.0f);
-    draw_text("Top screen shows progress; controls stay on bottom.", 14.0f,
-              108.0f, kFontMicro, kMuted, 290.0f);
+    draw_text(ellipsize(hint, 42), 14.0f, 83.0f, kFontSmall, kMuted);
+    draw_text(ellipsize("Top: progress  Bottom: controls", 42), 14.0f, 108.0f,
+              kFontMicro, kMuted);
     C2D_DrawRectSolid(14.0f, 140.0f, 0.3f, 292.0f, 3.0f, kSurfaceRaised);
     C2D_DrawRectSolid(14.0f, 140.0f, 0.4f, 92.0f, 3.0f, kAccent);
     end_frame();
