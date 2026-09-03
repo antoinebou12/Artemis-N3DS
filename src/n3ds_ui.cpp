@@ -102,6 +102,19 @@ std::string ellipsize(const std::string &value, std::size_t max_chars) {
     return value.substr(0, max_chars - 3) + "...";
 }
 
+std::string compact_action_label(const std::string &label) {
+    if (label == "Add Host") {
+        return "Add";
+    }
+    if (label == "Remove") {
+        return "Del";
+    }
+    if (label == "Settings") {
+        return "Sets";
+    }
+    return ellipsize(label, 5);
+}
+
 std::string trim_copy(const std::string &value) {
     std::size_t first = 0;
     while (first < value.size() &&
@@ -232,22 +245,28 @@ void draw_action_button(float x, float width, const char *key,
     C2D_DrawRectSolid(x, kActionBarY, 0.3f, width, kActionBarHeight,
                       background);
 
-    draw_pill(key, x + 5.0f, kActionBarY + 5.0f, 22.0f,
+    draw_pill(key, x + 4.0f, kActionBarY + 5.0f, 20.0f,
               primary && enabled ? C2D_Color32(174, 221, 255, 255)
                                  : kSurfaceSelected,
               primary && enabled ? kDarkText : foreground);
-    draw_text(ellipsize(label, 9), x + 31.0f, kActionBarY + 11.0f, kFontMicro,
-              foreground);
+    draw_text(compact_action_label(label), x + 27.0f, kActionBarY + 11.0f,
+              kFontMicro, foreground);
 }
 
 void draw_bottom_actions(const std::string &secondary_label,
                          bool allow_refresh, bool has_items) {
-    draw_action_button(6.0f, 72.0f, "B", "Back", true, false);
-    draw_action_button(84.0f, 72.0f, "Y",
+    constexpr float kActionX0 = 4.0f;
+    constexpr float kActionWidth = 78.0f;
+    constexpr float kActionStep = 78.0f;
+
+    draw_action_button(kActionX0, kActionWidth, "B", "Back", true, false);
+    draw_action_button(kActionX0 + kActionStep, kActionWidth, "Y",
                        secondary_label.empty() ? "More" : secondary_label,
                        !secondary_label.empty(), false);
-    draw_action_button(162.0f, 72.0f, "X", "Refresh", allow_refresh, false);
-    draw_action_button(240.0f, 74.0f, "A", "Open", has_items, true);
+    draw_action_button(kActionX0 + kActionStep * 2, kActionWidth, "X", "Scan",
+                       allow_refresh, false);
+    draw_action_button(kActionX0 + kActionStep * 3, kActionWidth, "A", "Open",
+                       has_items, true);
 }
 
 void draw_bottom_touch_menu(const std::string &title,
@@ -289,8 +308,8 @@ void draw_bottom_touch_menu(const std::string &title,
         C2D_DrawRectSolid(7.0f, kTouchRowsY, 0.3f, 306.0f, 58.0f, kSurface);
         draw_text(ellipsize("Refresh or Add below", 22), 18.0f,
                   kTouchRowsY + 10.0f, kFontSmall, kText);
-        draw_text("Use Refresh or Add Host", 18.0f, kTouchRowsY + 34.0f,
-                  kFontMicro, kMuted);
+        draw_text("Tap X to scan", 18.0f, kTouchRowsY + 34.0f, kFontMicro,
+                  kMuted);
     }
 
     draw_bottom_actions(secondary_label, allow_refresh, !items.empty());
@@ -357,13 +376,13 @@ int action_column_at(const touchPosition &touch) {
     if (touch.py < kActionBarY || touch.py > kActionBarY + kActionBarHeight) {
         return -1;
     }
-    if (touch.px < 80) {
+    if (touch.px < 82) {
         return 0;
     }
     if (touch.px < 160) {
         return 1;
     }
-    if (touch.px < 240) {
+    if (touch.px < 238) {
         return 2;
     }
     return 3;
