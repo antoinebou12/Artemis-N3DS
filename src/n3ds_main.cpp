@@ -25,6 +25,7 @@
 #include "stream_profile.hpp"
 #include "stream_telemetry_store.hpp"
 #include "system/dispatcher.hpp"
+#include "system/message.hpp"
 #include "system/n3ds_connection.hpp"
 #include "system/pair_record.hpp"
 #include "video/video.hpp"
@@ -39,6 +40,7 @@
 #include <algorithm>
 #include <exception>
 #include <malloc.h>
+#include <memory>
 #include <openssl/rand.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -111,6 +113,27 @@ void show_message(const std::string &title, const std::string &message) {
     }
 }
 
+void persist_runtime_config(PCONFIGURATION config) {
+    char config_path[] = MOONLIGHT_3DS_PATH "/moonlight.conf";
+    config_save(config_path, config);
+}
+
+void select_last_host_index(const std::vector<DiscoveredHost> &hosts,
+                            int &selected) {
+    std::string last_address;
+    uint16_t last_port = 47989;
+    if (!get_last_host(last_address, last_port)) {
+        return;
+    }
+    for (int i = 0; i < static_cast<int>(hosts.size()); ++i) {
+        if (hosts[(size_t)i].address == last_address &&
+            hosts[(size_t)i].port == last_port) {
+            selected = i;
+            return;
+        }
+    }
+}
+
 UiMenuResult show_menu(const std::string &title, const std::string &subtitle,
                        const std::vector<std::string> &items, int selected = 0,
                        const std::string &secondary = "",
@@ -156,6 +179,11 @@ UiMenuResult show_menu(const std::string &title, const std::string &subtitle,
         }
     }
     return {UiMenuAction::Back, index};
+}
+
+bool confirm_action(const std::string &title, const std::string &message) {
+    const auto result = show_menu(title, message, {"Yes", "No"}, 1);
+    return result.action == UiMenuAction::Select && result.index == 0;
 }
 
 std::string prompt_text(const char *hint, const std::string &initial = "",
@@ -252,22 +280,26 @@ SelectedHost select_host(PCONFIGURATION config) {
     };
 
     refresh();
+    select_last_host_index(hosts, selected);
 
     while (aptMainLoop()) {
         std::vector<std::string> items;
         for (const auto &host : hosts) {
-            std::string row = host.saved ? "Saved   " : "Found   ";
+            std::string row = host.saved ? "★ " : "• ";
             row += host.address + ":" + std::to_string(host.port);
             const std::string profile = get_host_profile(host.address, host.port);
             if (!profile.empty()) {
-                row += "   [" + profile + "]";
+                row += "  [" + profile + "]";
             }
             items.push_back(row);
         }
 
+        const bool can_remove =
+            !hosts.empty() && selected >= 0 && selected < (int)hosts.size() &&
+            hosts[(size_t)selected].saved;
         const auto result = show_menu(
-            "Hosts", "Sunshine, Apollo and Vibepollo", items, selected,
-            "Add Host", true);
+            "Hosts", "Saved & LAN hosts", items, selected,
+            can_remove ? "Remove" : "Add Host", true);
         selected = result.index;
 
         if (result.action == UiMenuAction::Back) {
@@ -275,20 +307,37 @@ SelectedHost select_host(PCONFIGURATION config) {
         }
         if (result.action == UiMenuAction::Refresh) {
             refresh();
+            select_last_host_index(hosts, selected);
             continue;
         }
         if (result.action == UiMenuAction::Secondary) {
+            if (can_remove) {
+                const auto &host = hosts[(size_t)selected];
+                if (confirm_action("Remove Host?",
+                                   "Remove " + host.address +
+                                       " from this 3DS?\nPairing keys stay "
+                                       "until you unpair on the PC.")) {
+                    remove_pair_address(host.address, host.port);
+                    refresh();
+                    select_last_host_index(hosts, selected);
+                }
+                continue;
+            }
             const std::string manual =
                 prompt_text("PC address, hostname, or address:port");
             SelectedHost host;
             if (parse_host_string(manual, host)) {
+                set_last_host(host.address, host.port);
                 return host;
             }
             continue;
         }
         if (result.action == UiMenuAction::Select && result.index >= 0 &&
             result.index < (int)hosts.size()) {
-            return {hosts[result.index].address, hosts[result.index].port};
+            const SelectedHost host{hosts[result.index].address,
+                                    hosts[result.index].port};
+            set_last_host(host.address, host.port);
+            return host;
         }
     }
 
@@ -307,9 +356,18 @@ void free_app_list(PAPP_LIST list) {
 bool load_apps_once(PSERVER_DATA server, std::vector<RemoteApp> &apps,
                     std::string &error) {
     PAPP_LIST list = nullptr;
+    http_set_timeout_s(90);
     const int result = gs_applist(server, &list);
+    http_set_timeout_s(60);
     if (result != GS_OK) {
-        error = gs_error != nullptr ? gs_error : "GameStream app-list request failed";
+        if (gs_error != nullptr &&
+            (strstr(gs_error, "Timeout") != nullptr ||
+             strstr(gs_error, "timeout") != nullptr)) {
+            error = "Host timed out. Vibepollo/Sunshine may still be starting.";
+        } else {
+            error = gs_error != nullptr ? gs_error
+                                        : "GameStream app-list request failed";
+        }
         free_app_list(list);
         return false;
     }
@@ -350,9 +408,19 @@ bool load_apps_with_retry(PCONFIGURATION config, PSERVER_DATA server,
     }
 
     // Vibepollo/Sunshine can briefly invalidate a reused HTTPS session after
-    // pairing or host-side display changes. Refresh serverinfo/cert state once
-    // and retry instead of immediately collapsing to "Can't get app list".
-    svcSleepThread(250000000LL);
+    // pairing or host-side display changes. Refresh serverinfo/cert state and
+    // retry instead of immediately collapsing to "Can't get app list".
+    svcSleepThread(500000000LL);
+    if (!reload_server(config, server, error)) {
+        return false;
+    }
+
+    apps.clear();
+    if (load_apps_once(server, apps, error)) {
+        return true;
+    }
+
+    svcSleepThread(500000000LL);
     if (!reload_server(config, server, error)) {
         return false;
     }
@@ -768,7 +836,12 @@ void show_host_info(PCONFIGURATION config, PSERVER_DATA server,
     show_message("Host Details", message);
 }
 
-static inline void dispatch_loop(void *_unused_) {
+struct InputLoopContext {
+    std::shared_ptr<N3dsInput> handler;
+};
+
+static inline void dispatch_loop(void *unused) {
+    (void)unused;
     auto dispatcher = MessageDispatcher::get_instance();
     auto connection_listener = N3dsConnectionListener::get_instance();
     while (!connection_listener->is_connection_closed()) {
@@ -777,12 +850,14 @@ static inline void dispatch_loop(void *_unused_) {
     }
 }
 
-static inline void input_loop(void *input_handler_in) {
-    N3dsInput *input_handler = static_cast<N3dsInput *>(input_handler_in);
+static inline void input_loop(void *context_in) {
+    auto *context = static_cast<InputLoopContext *>(context_in);
     auto connection_listener = N3dsConnectionListener::get_instance();
     while (!connection_listener->is_connection_closed()) {
         gspWaitForAnyEvent();
-        input_handler->n3dsinput_handle_event();
+        if (context != nullptr && context->handler != nullptr) {
+            context->handler->n3dsinput_handle_event();
+        }
     }
 }
 
@@ -792,17 +867,32 @@ static inline void stream_loop(PCONFIGURATION config,
     size_t stack_size = 0x20000;
     s32 priority = 0x30;
     svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+
+    Thread input_thread = nullptr;
+    Thread dispatch_thread = nullptr;
+    InputLoopContext input_context{input_handler};
+
     if (!config->viewonly && input_handler != nullptr) {
-        threadCreate(input_loop, input_handler.get(), stack_size, priority, -1,
-                     true);
+        input_thread =
+            threadCreate(input_loop, &input_context, stack_size, priority, -1,
+                         false);
     }
-    threadCreate(dispatch_loop, nullptr, stack_size, priority, -1, true);
+    dispatch_thread =
+        threadCreate(dispatch_loop, nullptr, stack_size, priority, -1, false);
 
     while (!connection_listener->is_connection_closed() && aptMainLoop()) {
         gspWaitForAnyEvent();
         if (aptShouldClose()) {
-            connection_listener->connection_terminated(0);
+            MessageDispatcher::get_instance()->post(
+                std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM));
         }
+    }
+
+    if (input_thread != nullptr) {
+        threadJoin(input_thread, U64_MAX);
+    }
+    if (dispatch_thread != nullptr) {
+        threadJoin(dispatch_thread, U64_MAX);
     }
 }
 
@@ -897,9 +987,16 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
 
     stream_loop(config, connection_listener, input_handler);
 
+    LiInterruptConnection();
     LiStopConnection();
     N3dsConnectionListener::destroy_instance();
-    n3ds_ui_init();
+    gspWaitForP3D();
+    gspWaitForPPF();
+    if (!n3ds_ui_init()) {
+        show_message("UI Restore Failed",
+                     "Could not restore the Artemis shell after streaming.");
+    }
+    persist_runtime_config(config);
 
     if (config->quitappafter) {
         gs_quit_app(server);
@@ -921,8 +1018,7 @@ bool stream_setup(PCONFIGURATION config, const SelectedHost &host,
                 presentation_mode_name(global_presentation_state().mode),
         };
 
-        const auto result = show_menu("Stream Setup",
-                                      app.name + "   " + host.address, items,
+        const auto result = show_menu("Stream Setup", host.address, items,
                                       selected);
         selected = result.index;
         if (result.action == UiMenuAction::Back) {
@@ -960,17 +1056,16 @@ void app_browser(PCONFIGURATION config, PSERVER_DATA server,
     while (aptMainLoop()) {
         if (reload) {
             n3ds_ui_status("Applications", host.address,
-                           {"Loading applications from the host..."},
-                           "Sunshine / Apollo / Vibepollo applist");
+                           {"Loading host app list..."},
+                           "Retry once if the host is still waking up");
             std::string error;
             if (!load_apps_with_retry(config, server, apps, error)) {
                 show_message(
                     "Application List Failed",
                     error +
-                        "\n\nThe client retried once with a fresh host session. "
-                        "Modern UUID/ArtVersion fields are supported. Check that "
-                        "Vibepollo has at least one named application and restart "
-                        "the host service if its /applist cache is stale.");
+                        "\n\nThe client retried with a fresh host session. "
+                        "Check that the host has at least one app and is "
+                        "reachable on the LAN.");
                 return;
             }
             reload = false;
@@ -1066,6 +1161,8 @@ bool connect_host(PCONFIGURATION config, PSERVER_DATA server,
     if (server->paired) {
         add_pair_address(host.address, host.port);
     }
+    set_last_host(host.address, host.port);
+    persist_runtime_config(config);
     return true;
 }
 
@@ -1076,10 +1173,10 @@ void host_screen(PCONFIGURATION config, PSERVER_DATA server,
         std::vector<std::string> items;
         if (server->paired) {
             items = {
-                "Applications",
+                "Apps",
                 "Settings",
                 "Host Details",
-                "Quit Active Host App",
+                "Quit Game",
                 "Unpair Host",
             };
         } else {
@@ -1098,6 +1195,7 @@ void host_screen(PCONFIGURATION config, PSERVER_DATA server,
         selected = result.index;
 
         if (result.action == UiMenuAction::Back) {
+            persist_runtime_config(config);
             return;
         }
         if (result.action == UiMenuAction::Secondary) {

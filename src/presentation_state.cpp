@@ -1,6 +1,7 @@
 #include "presentation_state.hpp"
 
 #include <algorithm>
+#include <cstring>
 
 namespace {
 PresentationState g_presentation_state{};
@@ -20,6 +21,33 @@ const char *presentation_mode_name(PresentationMode mode) {
         return "Stereo SBS";
     }
     return "Unknown";
+}
+
+bool presentation_mode_from_name(const char *name, PresentationMode &mode) {
+    if (name == nullptr) {
+        return false;
+    }
+    if (strcmp(name, "Fit") == 0) {
+        mode = PresentationMode::Fit;
+        return true;
+    }
+    if (strcmp(name, "Fill") == 0) {
+        mode = PresentationMode::Fill;
+        return true;
+    }
+    if (strcmp(name, "Stretch") == 0) {
+        mode = PresentationMode::Stretch;
+        return true;
+    }
+    if (strcmp(name, "Magnify") == 0) {
+        mode = PresentationMode::Magnify;
+        return true;
+    }
+    if (strcmp(name, "Stereo SBS") == 0 || strcmp(name, "StereoSideBySide") == 0) {
+        mode = PresentationMode::StereoSideBySide;
+        return true;
+    }
+    return false;
 }
 
 void normalize_presentation_state(PresentationState &state) {

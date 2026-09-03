@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <utility>
 #include <vector>
 
@@ -33,6 +34,22 @@
 namespace {
 const char *kPairedFile = MOONLIGHT_3DS_PATH "/paired";
 const char *kHostProfilesFile = MOONLIGHT_3DS_PATH "/host_profiles";
+const char *kLastHostFile = MOONLIGHT_3DS_PATH "/last_host";
+const char *kKeysDir = MOONLIGHT_3DS_PATH "/keys";
+const char *kDiagnosticsDir = MOONLIGHT_3DS_PATH "/diagnostics";
+
+void ensure_dir(const char *path) {
+    struct stat st {};
+    if (stat(path, &st) != 0) {
+        mkdir(path, 0777);
+    }
+}
+
+void ensure_moonlight_sd_dirs() {
+    ensure_dir(MOONLIGHT_3DS_PATH);
+    ensure_dir(kKeysDir);
+    ensure_dir(kDiagnosticsDir);
+}
 
 std::string make_host_key(const std::string &address, uint16_t port) {
     return address + ":" + std::to_string(port);
@@ -97,6 +114,7 @@ void trim(std::string &s) {
 }
 
 void add_pair_address(std::string address, uint16_t port) {
+    ensure_moonlight_sd_dirs();
     address += ":" + std::to_string(port);
 
     auto address_list = list_paired_addresses();
@@ -167,6 +185,7 @@ std::string get_host_profile(const std::string &address, uint16_t port) {
 
 void set_host_profile(const std::string &address, uint16_t port,
                       const std::string &profile) {
+    ensure_moonlight_sd_dirs();
     const std::string key = make_host_key(address, port);
     auto profiles = read_host_profiles();
     for (auto &entry : profiles) {
@@ -190,4 +209,50 @@ void remove_host_profile(const std::string &address, uint16_t port) {
                                   }),
                    profiles.end());
     write_host_profiles(profiles);
+}
+
+void set_last_host(const std::string &address, uint16_t port) {
+    ensure_moonlight_sd_dirs();
+    FILE *fd = fopen(kLastHostFile, "w");
+    if (fd == NULL) {
+        return;
+    }
+    fprintf(fd, "%s:%u\n", address.c_str(), static_cast<unsigned>(port));
+    fclose(fd);
+}
+
+bool get_last_host(std::string &address, uint16_t &port) {
+    std::ifstream file(kLastHostFile);
+    std::string line;
+    if (!std::getline(file, line)) {
+        return false;
+    }
+    trim(line);
+    if (line.empty()) {
+        return false;
+    }
+
+    const auto colon = line.rfind(':');
+    if (colon == std::string::npos) {
+        address = line;
+        port = 47989;
+        return true;
+    }
+
+    address = line.substr(0, colon);
+    trim(address);
+    if (address.empty()) {
+        return false;
+    }
+
+    try {
+        const int parsed_port = std::stoi(line.substr(colon + 1));
+        if (parsed_port <= 0 || parsed_port > 65535) {
+            return false;
+        }
+        port = static_cast<uint16_t>(parsed_port);
+    } catch (...) {
+        return false;
+    }
+    return true;
 }

@@ -19,6 +19,7 @@
 
 #include "config.hpp"
 #include "audio/audio.h"
+#include "presentation_state.hpp"
 #include "stream_profile.hpp"
 #include "system/pair_record.hpp"
 #include "util.h"
@@ -148,7 +149,17 @@ bool config_file_parse(PCONFIGURATION config) {
         char *key = NULL, *value = NULL;
         if (sscanf(line.c_str(), "%ms = %m[^\n]", &key, &value) == 2) {
             if (strcmp(key, "address") == 0) {
-                config->address = value;
+                std::strncpy(config->host_address, value,
+                             sizeof(config->host_address) - 1);
+                config->host_address[sizeof(config->host_address) - 1] = '\0';
+                config->address = config->host_address;
+            } else if (strcmp(key, "presentation_mode") == 0) {
+                PresentationMode mode = PresentationMode::Stretch;
+                if (presentation_mode_from_name(value, mode)) {
+                    PresentationState state = global_presentation_state();
+                    state.mode = mode;
+                    set_global_presentation_state(state);
+                }
             } else {
                 for (int i = 0; long_options[i].name != NULL; i++) {
                     if (strcmp(long_options[i].name, key) == 0) {
@@ -168,11 +179,16 @@ void config_save(char *filename, PCONFIGURATION config) {
     FILE *fd = fopen(filename, "w");
     if (fd == NULL) {
         fprintf(stderr, "Can't open configuration file: %s\n", filename);
-        exit(EXIT_FAILURE);
+        return;
     }
 
     if (config->profile != NULL)
         write_config_string(fd, "profile", config->profile);
+    if (config->address != NULL && config->address[0] != '\0')
+        write_config_string(fd, "address", config->address);
+    write_config_string(fd, "presentation_mode",
+                        presentation_mode_name(global_presentation_state().mode));
+    write_config_int(fd, "port", config->port);
     write_config_int(fd, "width", config->stream.width);
     write_config_int(fd, "height", config->stream.height);
     write_config_int(fd, "fps", config->stream.fps);
@@ -209,6 +225,7 @@ void config_parse(int argc, char *argv[], PCONFIGURATION config) {
     config->app = "Steam";
     config->action = NULL;
     config->address = NULL;
+    config->host_address[0] = '\0';
     config->config_file = NULL;
     config->profile = NULL;
     config->audio_device = NULL;

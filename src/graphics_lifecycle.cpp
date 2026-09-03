@@ -81,7 +81,7 @@ bool n3ds_graphics_acquire_shell() {
     C2D_Prepare();
     g_top_target = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
     g_bottom_target = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
-    g_text_buffer = C2D_TextBufNew(8192);
+    g_text_buffer = C2D_TextBufNew(16384);
     if (g_top_target == nullptr || g_bottom_target == nullptr ||
         g_text_buffer == nullptr) {
         release_shell_resources();

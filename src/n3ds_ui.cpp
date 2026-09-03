@@ -45,6 +45,18 @@ constexpr u64 kAnalogRepeatTicks =
 constexpr int kDetailsVisibleLines = 6;
 constexpr std::size_t kDetailsWrapChars = 55;
 
+// Citro2D's built-in font stays crisp only on half-integer scales. Keep all UI
+// typography on this ladder instead of ad-hoc values like 0.37 or 0.69.
+constexpr float kFontMicro = 0.50f;
+constexpr float kFontSmall = 0.75f;
+constexpr float kFontBody = 1.00f;
+constexpr float kFontTitle = 1.25f;
+constexpr float kFontHero = 1.50f;
+
+float crisp_scale(float scale) {
+    return std::max(kFontMicro, std::round(scale * 2.0f) / 2.0f);
+}
+
 struct TouchMenuState {
     bool active = false;
     bool moved = false;
@@ -118,20 +130,18 @@ void draw_text(const std::string &value, float x, float y, float scale,
     }
     C2D_TextOptimize(&text);
 
-    // The shell is rendered at the LCD's native resolution. Snapping glyph
-    // origins avoids sampling between physical pixels, which is most visible
-    // on the small labels used by the bottom-screen menu.
-    const float snapped_x = std::round(x);
-    const float snapped_y = std::round(y);
+    const float text_scale = crisp_scale(scale);
+    const float snapped_x = std::floor(x + 0.5f);
+    const float snapped_y = std::floor(y + 0.5f);
 
-    u32 flags = C2D_WithColor;
+    u32 flags = C2D_WithColor | C2D_AlignLeft;
     if (wrap_width > 0.0f) {
         flags |= C2D_WordWrap;
-        C2D_DrawText(&text, flags, snapped_x, snapped_y, 0.5f, scale, scale,
-                     color, wrap_width);
+        C2D_DrawText(&text, flags, snapped_x, snapped_y, 0.5f, text_scale,
+                     text_scale, color, wrap_width);
     } else {
-        C2D_DrawText(&text, flags, snapped_x, snapped_y, 0.5f, scale, scale,
-                     color);
+        C2D_DrawText(&text, flags, snapped_x, snapped_y, 0.5f, text_scale,
+                     text_scale, color);
     }
 }
 
@@ -158,14 +168,14 @@ u32 item_accent(const std::string &item) {
 void draw_pill(const std::string &label, float x, float y, float width,
                u32 background, u32 foreground) {
     C2D_DrawRectSolid(x, y, 0.45f, width, 18.0f, background);
-    draw_text(ellipsize(label, 12), x + 7.0f, y + 3.0f, 0.29f, foreground);
+    draw_text(ellipsize(label, 12), x + 7.0f, y + 2.0f, kFontMicro, foreground);
 }
 
 void draw_header(const std::string &title, const std::string &subtitle) {
-    draw_text("ARTEMIS 3DS", 18.0f, 10.0f, 0.30f, kAccent);
-    draw_text(ellipsize(title, 34), 18.0f, 27.0f, 0.69f, kText);
+    draw_text("ARTEMIS 3DS", 18.0f, 8.0f, kFontMicro, kAccent);
+    draw_text(ellipsize(title, 34), 18.0f, 24.0f, kFontHero, kText);
     if (!subtitle.empty()) {
-        draw_text(ellipsize(subtitle, 66), 19.0f, 54.0f, 0.37f, kMuted);
+        draw_text(ellipsize(subtitle, 66), 18.0f, 50.0f, kFontSmall, kMuted);
     }
     C2D_DrawRectSolid(18.0f, 72.0f, 0.4f, 364.0f, 2.0f, kAccent);
 }
@@ -173,17 +183,17 @@ void draw_header(const std::string &title, const std::string &subtitle) {
 void draw_context_preview(const char *label, const std::string &value, float x,
                           float width) {
     C2D_DrawRectSolid(x, 184.0f, 0.3f, width, 39.0f, kSurface);
-    draw_text(label, x + 10.0f, 190.0f, 0.25f, kMuted);
-    draw_text(ellipsize(value, 25), x + 10.0f, 204.0f, 0.32f, kText);
+    draw_text(label, x + 10.0f, 188.0f, kFontMicro, kMuted);
+    draw_text(ellipsize(value, 25), x + 10.0f, 202.0f, kFontSmall, kText);
 }
 
 void draw_top_context(const std::vector<std::string> &items, int selected) {
     if (items.empty()) {
         C2D_DrawRectSolid(18.0f, 88.0f, 0.3f, 364.0f, 104.0f, kSurface);
         draw_pill("EMPTY", 32.0f, 101.0f, 56.0f, kAccentSoft, kAccent);
-        draw_text("Nothing here yet", 32.0f, 130.0f, 0.56f, kText);
-        draw_text("Use the bottom touch screen to refresh or add a host.",
-                  32.0f, 160.0f, 0.36f, kMuted, 330.0f);
+        draw_text("Add or refresh on bottom", 32.0f, 126.0f, kFontBody, kText);
+        draw_text("Use Refresh or Add Host on the touch screen.",
+                  32.0f, 154.0f, kFontSmall, kMuted, 330.0f);
         return;
     }
 
@@ -200,9 +210,9 @@ void draw_top_context(const std::vector<std::string> &items, int selected) {
                   static_cast<int>(items.size()));
     draw_pill(counter, 314.0f, 99.0f, 54.0f, kSurfaceRaised, kMuted);
 
-    draw_text(ellipsize(items[safe_selected], 92), 33.0f, 128.0f, 0.50f,
+    draw_text(ellipsize(items[safe_selected], 92), 33.0f, 124.0f, kFontBody,
               kText, 324.0f);
-    draw_text("Top: context   Bottom: navigation", 33.0f, 157.0f, 0.28f,
+    draw_text("Top: context   Bottom: navigation", 33.0f, 152.0f, kFontMicro,
               kMuted);
 
     const std::string previous =
@@ -227,7 +237,7 @@ void draw_action_button(float x, float width, const char *key,
               primary && enabled ? C2D_Color32(174, 221, 255, 255)
                                  : kSurfaceSelected,
               primary && enabled ? kDarkText : foreground);
-    draw_text(ellipsize(label, 9), x + 31.0f, kActionBarY + 13.0f, 0.30f,
+    draw_text(ellipsize(label, 9), x + 31.0f, kActionBarY + 11.0f, kFontMicro,
               foreground);
 }
 
@@ -246,10 +256,9 @@ void draw_bottom_touch_menu(const std::string &title,
                             int selected,
                             const std::string &secondary_label,
                             bool allow_refresh) {
-    draw_text(ellipsize(title, 25), 10.0f, 8.0f, 0.48f, kText);
-    draw_pill("TOUCH", 252.0f, 8.0f, 58.0f, kAccentSoft, kAccent);
-    draw_text("tap to open | drag / Circle Pad to move", 10.0f, 34.0f, 0.28f,
-              kMuted);
+    draw_text(ellipsize(title, 25), 10.0f, 6.0f, kFontTitle, kText);
+    draw_pill("TOUCH", 252.0f, 6.0f, 58.0f, kAccentSoft, kAccent);
+    draw_text("Tap / stick to move", 10.0f, 32.0f, kFontMicro, kMuted);
 
     if (!items.empty()) {
         const int safe_selected =
@@ -272,17 +281,17 @@ void draw_bottom_touch_menu(const std::string &title,
             if (is_selected) {
                 C2D_DrawRectSolid(7.0f, y, 0.45f, 4.0f, kTouchRowHeight,
                                   accent);
-                draw_text(">", 292.0f, y + 5.0f, 0.38f, accent);
+                draw_text(">", 292.0f, y + 4.0f, kFontSmall, accent);
             }
-            draw_text(ellipsize(items[item_index], 44), 18.0f, y + 5.0f,
-                      0.35f, is_selected ? kText : kMuted);
+            draw_text(ellipsize(items[item_index], 44), 18.0f, y + 4.0f,
+                      kFontSmall, is_selected ? kText : kMuted);
         }
     } else {
         C2D_DrawRectSolid(7.0f, kTouchRowsY, 0.3f, 306.0f, 58.0f, kSurface);
-        draw_text("No items available", 18.0f, kTouchRowsY + 10.0f, 0.42f,
-                  kText);
-        draw_text("Use Refresh or Add Host", 18.0f, kTouchRowsY + 34.0f,
-                  0.33f, kMuted);
+        draw_text("Add or refresh on bottom", 18.0f, kTouchRowsY + 8.0f,
+                  kFontSmall, kText);
+        draw_text("Use Refresh or Add Host", 18.0f, kTouchRowsY + 30.0f,
+                  kFontMicro, kMuted);
     }
 
     draw_bottom_actions(secondary_label, allow_refresh, !items.empty());
@@ -514,7 +523,7 @@ void draw_details_button(float x, float width, const char *key,
               primary && enabled ? C2D_Color32(174, 221, 255, 255)
                                  : kSurfaceSelected,
               primary && enabled ? kDarkText : foreground);
-    draw_text(ellipsize(label, 10), x + 38.0f, 196.0f, 0.33f, foreground);
+    draw_text(ellipsize(label, 10), x + 38.0f, 194.0f, kFontSmall, foreground);
 }
 
 void draw_details_frame(const std::string &title, const std::string &subtitle,
@@ -537,9 +546,9 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
         if (line_index >= static_cast<int>(lines.size())) {
             break;
         }
-        draw_text(ellipsize(lines[line_index], 58), 31.0f, y, 0.36f,
+        draw_text(ellipsize(lines[line_index], 58), 31.0f, y, kFontSmall,
                   lines[line_index].empty() ? kMuted : kText);
-        y += 20.0f;
+        y += 22.0f;
     }
 
     if (lines.size() > kDetailsVisibleLines) {
@@ -558,10 +567,10 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
     }
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
-    draw_text("Details & diagnostics", 12.0f, 10.0f, 0.48f, kText);
-    draw_pill("SCROLL", 247.0f, 8.0f, 63.0f, kAccentSoft, kAccent);
-    draw_text("Swipe vertically or use Circle Pad / C-Stick", 12.0f, 39.0f,
-              0.29f, kMuted);
+    draw_text("Details & diagnostics", 12.0f, 8.0f, kFontTitle, kText);
+    draw_pill("SCROLL", 247.0f, 6.0f, 63.0f, kAccentSoft, kAccent);
+    draw_text("Swipe vertically or use Circle Pad / C-Stick", 12.0f, 36.0f,
+              kFontMicro, kMuted);
 
     char position[64];
     const int first_line = lines.empty() ? 0 : safe_offset + 1;
@@ -572,10 +581,10 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
     draw_pill(position, 12.0f, 67.0f, 112.0f, kSurfaceRaised, kMuted);
 
     if (!status.empty()) {
-        draw_text(ellipsize(status, 48), 12.0f, 96.0f, 0.31f, kSuccess);
+        draw_text(ellipsize(status, 48), 12.0f, 94.0f, kFontMicro, kSuccess);
     } else {
-        draw_text("X saves this diagnostic to the SD card", 12.0f, 96.0f,
-                  0.31f, kMuted);
+        draw_text("X saves this diagnostic to the SD card", 12.0f, 94.0f,
+                  kFontMicro, kMuted);
     }
 
     C2D_DrawRectSolid(12.0f, 130.0f, 0.3f, 296.0f, 3.0f, kSurfaceRaised);
@@ -943,7 +952,7 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     for (const auto &line : lines) {
         C2D_DrawRectSolid(18.0f, y, 0.3f, 364.0f, 27.0f, kSurface);
         C2D_DrawRectSolid(18.0f, y, 0.45f, 4.0f, 27.0f, kAccent);
-        draw_text(ellipsize(line, 62), 30.0f, y + 5.0f, 0.39f, kText);
+        draw_text(ellipsize(line, 62), 30.0f, y + 4.0f, kFontSmall, kText);
         y += 31.0f;
         if (y > 220.0f) {
             break;
@@ -951,11 +960,11 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     }
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
-    draw_text("Artemis 3DS", 14.0f, 12.0f, 0.50f, kText);
-    draw_pill("WORKING", 14.0f, 43.0f, 72.0f, kAccentSoft, kAccent);
-    draw_text(hint, 14.0f, 83.0f, 0.39f, kMuted, 290.0f);
+    draw_text("Artemis 3DS", 14.0f, 10.0f, kFontBody, kText);
+    draw_pill("WORKING", 14.0f, 41.0f, 72.0f, kAccentSoft, kAccent);
+    draw_text(hint, 14.0f, 80.0f, kFontSmall, kMuted, 290.0f);
     draw_text("Top screen shows progress; controls stay on bottom.", 14.0f,
-              113.0f, 0.29f, kMuted, 290.0f);
+              108.0f, kFontMicro, kMuted, 290.0f);
     C2D_DrawRectSolid(14.0f, 140.0f, 0.3f, 292.0f, 3.0f, kSurfaceRaised);
     C2D_DrawRectSolid(14.0f, 140.0f, 0.4f, 92.0f, 3.0f, kAccent);
     end_frame();

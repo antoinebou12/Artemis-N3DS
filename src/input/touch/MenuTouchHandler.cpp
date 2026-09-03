@@ -33,7 +33,7 @@ const char *kButtonLabels[4][2] = {
     {"GAMEPAD", "MOUSEPAD"},
     {"KEYBOARD", "ABS TOUCH"},
     {"DS STRETCH", "MAGNIFY"},
-    {"PERFORMANCE", "EXIT STREAM"},
+    {"PERFORMANCE", "QUIT"},
 };
 
 N3dsTouchType kButtonTypes[4][2] = {
@@ -91,8 +91,8 @@ void MenuTouchHandler::redraw(bool force) {
     consoleSelect(&DebugTouchHandler::bottomScreen);
     consoleClear();
     std::printf("ARTEMIS 3DS  |  QUICK ACTIONS\n");
-    std::printf("TOP: live stream (unchanged)\n");
-    std::printf("BOTTOM: this menu only\n");
+    std::printf("TOP: video\n");
+    std::printf("BOTTOM: menu\n");
     std::printf("----------------------------------------\n");
 
     for (int row = 0; row < 4; ++row) {
@@ -106,8 +106,7 @@ void MenuTouchHandler::redraw(bool force) {
         std::printf("\n");
     }
 
-    std::printf("\nCircle/C-Stick/D-pad: move   A: open\n");
-    std::printf("HOME: this menu   B: gamepad overlay\n");
+    std::printf("\nHOME: menu B: gamepad A: select\n");
     std::printf("Local menu input is not sent to the PC.\n");
 }
 

@@ -28,6 +28,7 @@ struct PresentationGeometry {
 };
 
 const char *presentation_mode_name(PresentationMode mode);
+bool presentation_mode_from_name(const char *name, PresentationMode &mode);
 void normalize_presentation_state(PresentationState &state);
 PresentationGeometry compute_presentation_geometry(int source_width,
                                                    int source_height,

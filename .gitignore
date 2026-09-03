@@ -4,6 +4,8 @@ build/
 *.elf
 *.smdh
 
-!dist/
+dist/*
 !dist/*.cia
 !dist/*.3dsx
+!dist/INSTALL.md
+!dist/SD-DATA.md

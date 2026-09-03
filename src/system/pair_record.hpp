@@ -31,6 +31,9 @@ void add_pair_address(std::string address, uint16_t port);
 void remove_pair_address(std::string address, uint16_t port);
 std::vector<std::string> list_paired_addresses();
 
+void set_last_host(const std::string &address, uint16_t port);
+bool get_last_host(std::string &address, uint16_t &port);
+
 std::string get_host_profile(const std::string &address, uint16_t port);
 void set_host_profile(const std::string &address, uint16_t port,
                       const std::string &profile);

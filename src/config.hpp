@@ -42,6 +42,7 @@ typedef struct _CONFIGURATION {
     char *config_file;
     char *profile;
     char key_dir[4096];
+    char host_address[256];
     bool sops;
     bool localaudio;
     bool unsupported;
