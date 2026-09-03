@@ -103,6 +103,9 @@ std::string ellipsize(const std::string &value, std::size_t max_chars) {
 }
 
 std::string compact_action_label(const std::string &label) {
+    if (label == "Scan" || label == "Scan Host") {
+        return "Scan";
+    }
     if (label == "Add Host") {
         return "Add";
     }
@@ -1061,4 +1064,146 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     C2D_DrawRectSolid(24.0f, 118.0f, 0.3f, 272.0f, 3.0f, kSurfaceRaised);
     C2D_DrawRectSolid(24.0f, 118.0f, 0.4f, 96.0f, 3.0f, kAccent);
     end_frame();
+}
+
+namespace {
+struct BusyWaitState {
+    std::string title;
+    std::string subtitle;
+    std::string pin;
+    std::string cancel_label = "Cancel";
+    std::string bottom_hint;
+    std::string bottom_subhint;
+    std::vector<std::string> lines;
+    bool show_pin = false;
+    bool touch_on_cancel = false;
+    u64 last_redraw = 0;
+};
+
+BusyWaitState g_busy_wait;
+
+bool busy_cancel_hit(const touchPosition &touch) {
+    return touch.py >= static_cast<u16>(kActionBarY) &&
+           touch.py <= static_cast<u16>(kActionBarY + kActionBarHeight) &&
+           touch.px >= 4 && touch.px <= 316;
+}
+
+void draw_busy_wait_frame() {
+    if (!n3ds_graphics_shell_active()) {
+        return;
+    }
+
+    begin_frame();
+    C2D_SceneBegin(n3ds_graphics_top_target());
+    draw_header(g_busy_wait.title, g_busy_wait.subtitle);
+
+    float y = 88.0f;
+    if (g_busy_wait.show_pin) {
+        C2D_DrawRectSolid(18.0f, 86.0f, 0.3f, 364.0f, 58.0f, kSurfaceSelected);
+        C2D_DrawRectSolid(18.0f, 86.0f, 0.45f, 5.0f, 58.0f, kAccent);
+        draw_text("PIN", 33.0f, 94.0f, kFontMicro, kMuted);
+        draw_text(ellipsize(g_busy_wait.pin, 12), 33.0f, 112.0f, kFontHero,
+                  kText);
+        y = 156.0f;
+    }
+
+    for (const auto &line : g_busy_wait.lines) {
+        if (!g_busy_wait.show_pin) {
+            C2D_DrawRectSolid(18.0f, y, 0.3f, 364.0f, 27.0f, kSurface);
+            C2D_DrawRectSolid(18.0f, y, 0.45f, 4.0f, 27.0f, kAccent);
+            draw_text(ellipsize(line, 40), 30.0f, y + 5.0f, kFontSmall, kText);
+            y += 31.0f;
+        } else {
+            draw_text(ellipsize(line, 48), 24.0f, y, kFontSmall, kMuted);
+            y += 22.0f;
+        }
+        if (y > 220.0f) {
+            break;
+        }
+    }
+
+    C2D_SceneBegin(n3ds_graphics_bottom_target());
+    if (!g_busy_wait.bottom_hint.empty()) {
+        draw_text(ellipsize(g_busy_wait.bottom_hint, 42), 12.0f, 24.0f,
+                  kFontSmall, kText);
+    }
+    if (!g_busy_wait.bottom_subhint.empty()) {
+        draw_text(ellipsize(g_busy_wait.bottom_subhint, 48), 12.0f, 48.0f,
+                  kFontMicro, kMuted);
+    }
+    C2D_DrawRectSolid(24.0f, 98.0f, 0.3f, 272.0f, 3.0f, kSurfaceRaised);
+    C2D_DrawRectSolid(24.0f, 98.0f, 0.4f, 96.0f, 3.0f, kAccent);
+    draw_action_button(4.0f, 312.0f, "B", g_busy_wait.cancel_label, true,
+                       false);
+    end_frame();
+}
+
+void begin_busy_wait(const std::string &title, const std::string &subtitle,
+                     const std::vector<std::string> &lines, bool show_pin,
+                     const std::string &pin, const std::string &cancel_label,
+                     const std::string &bottom_hint,
+                     const std::string &bottom_subhint) {
+    g_busy_wait.title = title;
+    g_busy_wait.subtitle = subtitle;
+    g_busy_wait.lines = lines;
+    g_busy_wait.show_pin = show_pin;
+    g_busy_wait.pin = pin;
+    g_busy_wait.cancel_label = cancel_label;
+    g_busy_wait.bottom_hint = bottom_hint;
+    g_busy_wait.bottom_subhint = bottom_subhint;
+    g_busy_wait.touch_on_cancel = false;
+    g_busy_wait.last_redraw = svcGetSystemTick();
+    draw_busy_wait_frame();
+}
+} // namespace
+
+void n3ds_ui_pair_wait(const std::string &title, const std::string &subtitle,
+                       const std::string &pin,
+                       const std::vector<std::string> &lines) {
+    begin_busy_wait(title, subtitle, lines, true, pin, "Cancel",
+                    "Enter this PIN in the host web UI",
+                    "Keep this screen open until paired");
+}
+
+void n3ds_ui_connect_wait(const std::string &title, const std::string &subtitle,
+                          const std::vector<std::string> &lines) {
+    begin_busy_wait(title, subtitle, lines, false, "", "Disconnect",
+                    "Connecting to GameStream host",
+                    "Tap Disconnect or press B to abort");
+}
+
+bool n3ds_ui_wait_cancel_polled() {
+    if (!n3ds_graphics_shell_active()) {
+        return false;
+    }
+
+    hidScanInput();
+    const u32 down = hidKeysDown();
+    const u32 held = hidKeysHeld();
+    if ((down & KEY_B) != 0) {
+        return true;
+    }
+
+    if ((down & KEY_TOUCH) != 0) {
+        touchPosition touch{};
+        hidTouchRead(&touch);
+        g_busy_wait.touch_on_cancel = busy_cancel_hit(touch);
+    } else if ((held & KEY_TOUCH) != 0) {
+        touchPosition touch{};
+        hidTouchRead(&touch);
+        if (g_busy_wait.touch_on_cancel && !busy_cancel_hit(touch)) {
+            g_busy_wait.touch_on_cancel = false;
+        }
+    } else if (g_busy_wait.touch_on_cancel) {
+        g_busy_wait.touch_on_cancel = false;
+        return true;
+    }
+
+    const u64 now = svcGetSystemTick();
+    if (g_busy_wait.last_redraw == 0 ||
+        now - g_busy_wait.last_redraw > SYSCLOCK_ARM11) {
+        g_busy_wait.last_redraw = now;
+        draw_busy_wait_frame();
+    }
+    return false;
 }

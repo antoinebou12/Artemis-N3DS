@@ -190,8 +190,7 @@ static int load_serverinfo(PSERVER_DATA server, bool https) {
     ret = GS_OUT_OF_MEMORY;
     goto cleanup;
   }
-  if (http_request(url, data) != GS_OK) {
-    ret = GS_IO_ERROR;
+  if ((ret = http_request(url, data)) != GS_OK) {
     goto cleanup;
   }
 
@@ -289,7 +288,11 @@ static int load_server_status(PSERVER_DATA server) {
   // for everything because it doesn't accurately tell us if we're paired.
   ret = GS_INVALID;
   for (i = 0; i < 2 && ret != GS_OK; i++) {
+    http_set_fresh_connect(1);
     ret = load_serverinfo(server, i == 0);
+    http_set_fresh_connect(0);
+    if (ret == GS_CANCELLED)
+      return ret;
   }
 
   if (ret == GS_OK && !server->unsupported) {
@@ -636,7 +639,12 @@ int gs_pair(PSERVER_DATA server, char* pin) {
   uuid_generate_random(uuid);
   uuid_unparse(uuid, uuid_str);
   snprintf(url, url_max_len, "https://%s:%u/pair?uniqueid=%s&uuid=%s&devicename=roth&updateState=1&phrase=pairchallenge", server->serverInfo.address, server->httpsPort, unique_id, uuid_str);
-  if ((ret = http_request(url, data)) != GS_OK)
+  // PIN is already accepted. Fresh TCP avoids a stale HTTP session before the
+  // slow 3DS client-cert TLS handshake (connect timeout is raised separately).
+  http_set_fresh_connect(1);
+  ret = http_request(url, data);
+  http_set_fresh_connect(0);
+  if (ret != GS_OK)
     goto cleanup;
 
   free(result);

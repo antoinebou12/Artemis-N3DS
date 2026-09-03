@@ -28,6 +28,7 @@
 #include "system/message.hpp"
 #include "system/n3ds_connection.hpp"
 #include "system/pair_record.hpp"
+#include "connection_status.hpp"
 #include "video/video.hpp"
 #include "video/video_layout.hpp"
 
@@ -269,33 +270,33 @@ void apply_host_profile(PCONFIGURATION config, const SelectedHost &host,
 SelectedHost select_host(PCONFIGURATION config) {
     int selected = 0;
     std::vector<DiscoveredHost> hosts;
-    bool network_error_shown = false;
-    constexpr u64 kAutoScanMs = 8000;
 
-    auto refresh = [&](bool show_scan_status) {
-        const NetworkStatus network = moonlight_network_status();
-        if (network != NetworkStatus::Ready) {
-            if (!network_error_shown || show_scan_status) {
-                show_message("No Network",
-                             moonlight_network_status_message(network));
-                network_error_shown = true;
-            }
-            hosts = discover_moonlight_hosts(false);
-            selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
+    auto show_discovery_progress = [](const DiscoveryProgress &progress) {
+        if (!n3ds_ui_active()) {
             return;
         }
+        n3ds_ui_status(progress.title, progress.status, progress.lines, "");
+    };
 
-        network_error_shown = false;
-        if (show_scan_status && n3ds_ui_active()) {
-            n3ds_ui_status("Hosts", "Scanning LAN...",
-                           {"10.x / 172.16 / 192.168", "Including saved hosts"},
-                           "Please wait");
-        }
-        hosts = discover_moonlight_hosts(show_scan_status);
+    auto load_saved = [&]() {
+        hosts = list_saved_moonlight_hosts();
         selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
     };
 
-    refresh(true);
+    auto scan_hosts = [&]() {
+        const NetworkStatus network = moonlight_network_status();
+        if (network != NetworkStatus::Ready) {
+            show_message("No Network",
+                         moonlight_network_status_message(network));
+            load_saved();
+            return;
+        }
+        hosts = discover_moonlight_hosts(true, show_discovery_progress);
+        selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
+    };
+
+    // Show saved hosts immediately; LAN scan only when the user taps Scan.
+    load_saved();
     select_last_host_index(hosts, selected);
 
     while (aptMainLoop()) {
@@ -314,20 +315,18 @@ SelectedHost select_host(PCONFIGURATION config) {
             !hosts.empty() && selected >= 0 && selected < (int)hosts.size() &&
             hosts[(size_t)selected].saved;
         const auto result = show_menu(
-            "Hosts", "Saved & LAN hosts", items, selected,
-            can_remove ? "Remove" : "Add Host", true, kAutoScanMs);
+            "Hosts",
+            hosts.empty() ? "Tap Scan to find PCs on port 47989"
+                          : "Saved hosts — Scan finds LAN PCs",
+            items, selected, can_remove ? "Remove" : "Add Host", true, 0,
+            "Scan");
         selected = result.index;
 
         if (result.action == UiMenuAction::Back) {
             return {};
         }
         if (result.action == UiMenuAction::Refresh) {
-            refresh(true);
-            select_last_host_index(hosts, selected);
-            continue;
-        }
-        if (result.action == UiMenuAction::AutoRefresh) {
-            refresh(false);
+            scan_hosts();
             select_last_host_index(hosts, selected);
             continue;
         }
@@ -339,7 +338,7 @@ SelectedHost select_host(PCONFIGURATION config) {
                                        " from this 3DS?\nPairing keys stay "
                                        "until you unpair on the PC.")) {
                     remove_pair_address(host.address, host.port);
-                    refresh(true);
+                    load_saved();
                     select_last_host_index(hosts, selected);
                 }
                 continue;
@@ -913,8 +912,9 @@ static inline void dispatch_loop(void *unused) {
     (void)unused;
     auto dispatcher = MessageDispatcher::get_instance();
     auto connection_listener = N3dsConnectionListener::get_instance();
-    while (!connection_listener->is_connection_closed()) {
-        gspWaitForAnyEvent();
+    while (connection_listener != nullptr &&
+           !connection_listener->is_connection_closed()) {
+        gspWaitForVBlank();
         dispatcher->dispatch_all();
     }
 }
@@ -922,25 +922,24 @@ static inline void dispatch_loop(void *unused) {
 static inline void input_loop(void *context_in) {
     auto *context = static_cast<InputLoopContext *>(context_in);
     auto connection_listener = N3dsConnectionListener::get_instance();
-    while (!connection_listener->is_connection_closed()) {
-        gspWaitForAnyEvent();
+    while (connection_listener != nullptr &&
+           !connection_listener->is_connection_closed()) {
+        gspWaitForVBlank();
         if (context != nullptr && context->handler != nullptr) {
             context->handler->n3dsinput_handle_event();
         }
     }
 }
 
-// Ensure worker threads always observe connection_closed before we join them.
-// aptMainLoop() can become false while EXIT_STREAM is still queued, which
-// previously left input/dispatch threads blocked forever.
 static inline void request_stream_shutdown(
     N3dsConnectionListener *connection_listener, int error_code) {
+    aptSetHomeAllowed(true);
+    n3ds_stream_render_abort();
     if (connection_listener == nullptr ||
         connection_listener->is_connection_closed()) {
         return;
     }
 
-    printf("[stream] Requesting shutdown (code %d)\n", error_code);
     LiInterruptConnection();
 
     auto dispatcher = MessageDispatcher::get_instance();
@@ -951,6 +950,17 @@ static inline void request_stream_shutdown(
     if (!connection_listener->is_connection_closed()) {
         connection_listener->connection_terminated(error_code);
     }
+}
+
+static inline void join_worker(Thread thread) {
+    if (thread == nullptr) {
+        return;
+    }
+    // Never wait forever: a missed GSP event used to freeze the 3DS on a
+    // black/console screen with HOME disabled.
+    constexpr u64 kJoinTimeoutNs = 1500000000ULL;
+    threadJoin(thread, kJoinTimeoutNs);
+    threadFree(thread);
 }
 
 static inline void stream_loop(PCONFIGURATION config,
@@ -975,31 +985,21 @@ static inline void stream_loop(PCONFIGURATION config,
 
     while (!connection_listener->is_connection_closed()) {
         if (!aptMainLoop() || aptShouldClose()) {
-            printf("[stream] System close requested during stream\n");
             request_stream_shutdown(connection_listener,
                                     ML_ERROR_GRACEFUL_TERMINATION);
             break;
         }
-        gspWaitForAnyEvent();
+        gspWaitForVBlank();
     }
 
     if (!connection_listener->is_connection_closed()) {
-        printf("[stream] Forcing shutdown before worker join\n");
         request_stream_shutdown(connection_listener,
                                 ML_ERROR_GRACEFUL_TERMINATION);
     }
 
     MessageDispatcher::get_instance()->dispatch_all();
-
-    printf("[stream] Joining input/dispatch workers\n");
-    if (input_thread != nullptr) {
-        threadJoin(input_thread, U64_MAX);
-        threadFree(input_thread);
-    }
-    if (dispatch_thread != nullptr) {
-        threadJoin(dispatch_thread, U64_MAX);
-        threadFree(dispatch_thread);
-    }
+    join_worker(input_thread);
+    join_worker(dispatch_thread);
 }
 
 bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
@@ -1071,8 +1071,6 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
     // Citro2D owns the GPU only for the shell. Hand it back before the legacy
     // PICA200 video renderer starts, then restore the shell after streaming.
     n3ds_ui_shutdown();
-    consoleSelect(&DebugTouchHandler::topScreen);
-    consoleClear();
 
     auto connection_listener =
         N3dsConnectionListener::create_instance(config->motion_controls);
@@ -1088,7 +1086,13 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
         n3ds_graphics_reset_after_stream();
         n3ds_ui_init();
         show_message("Connection Failed",
-                     "Moonlight connection error " + std::to_string(status));
+                     status == 104
+                         ? "Host reset the stream handshake (error 104). "
+                           "Stay on the same Wi-Fi as the PC and try again."
+                         : status == ML_ERROR_FRAME_CONVERSION
+                               ? connection_termination_user_message(status)
+                               : "Moonlight connection error " +
+                                     std::to_string(status));
         return false;
     }
 
@@ -1097,39 +1101,36 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
     const std::string stream_end_message =
         connection_listener->termination_user_message();
 
-    printf("[stream] Releasing local input handler\n");
+    aptSetHomeAllowed(true);
+    n3ds_stream_render_abort();
+    // Give the video thread a couple frames to notice the abort before stop.
+    gspWaitForVBlank();
+    gspWaitForVBlank();
     input_handler.reset();
-
-    printf("[stream] Interrupting Moonlight connection\n");
+    aptSetHomeAllowed(true);
     LiInterruptConnection();
-    printf("[stream] Stopping Moonlight connection\n");
     LiStopConnection();
-    printf("[stream] Moonlight connection stopped\n");
-
     N3dsConnectionListener::destroy_instance();
 
-    consoleSelect(&DebugTouchHandler::topScreen);
-    consoleClear();
-    consoleSelect(&DebugTouchHandler::bottomScreen);
-    consoleClear();
-
     n3ds_graphics_reset_after_stream();
+    aptSetHomeAllowed(true);
     if (!n3ds_ui_init()) {
-        printf("[stream] ERROR: Citro2D shell restore failed\n");
-        gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
-        gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
-        gfxSetDoubleBuffering(GFX_TOP, false);
-        gfxSetDoubleBuffering(GFX_BOTTOM, false);
+        aptSetHomeAllowed(true);
         fallback_wait_for_button(
-            "Stream ended but the Artemis UI could not be restored.\n"
-            "Press A or B to return to menus.");
-    } else {
-        printf("[stream] Shell UI restored successfully\n");
-        n3ds_ui_status("Artemis 3DS", "Returned from stream", {},
-                       "Restoring menus...");
-        if (!stream_end_message.empty()) {
-            show_message("Stream Ended", stream_end_message);
+            "Stream ended. Press A or B to return to menus.");
+        if (!n3ds_ui_init()) {
+            return true;
         }
+    }
+
+    // Force a shell paint so Quit never leaves a black screen before the
+    // Applications / Host menu redraws.
+    n3ds_ui_status("Artemis 3DS", "Returned from stream",
+                   {stream_end_message.empty() ? "Back in host menus"
+                                               : stream_end_message},
+                   "Opening menu...");
+    if (!stream_end_message.empty()) {
+        show_message("Stream Ended", stream_end_message);
     }
     persist_runtime_config(config);
 
@@ -1241,27 +1242,22 @@ void app_browser(PCONFIGURATION config, PSERVER_DATA server,
 
 void pair_host(PCONFIGURATION config, PSERVER_DATA server,
                const SelectedHost &host) {
-    http_set_timeout_s(5 * 60);
+    http_set_timeout_s(10 * 60);
 
     char pin[5];
     snprintf(pin, sizeof(pin), "%d%d%d%d", (unsigned)random() % 10,
              (unsigned)random() % 10, (unsigned)random() % 10,
              (unsigned)random() % 10);
 
-    n3ds_ui_status("Pair Host", host.address,
-                   {std::string("PIN: ") + pin,
-                    "Enter this PIN in the host web interface"},
-                   "Waiting for approval... Press B to cancel");
+    n3ds_ui_pair_wait("Pair Host", host.address, pin,
+                      {"Enter this PIN in the host web UI",
+                       "Leave open until pairing finishes"});
 
     http_set_cancel_callback(
-        [](void *) {
-            hidScanInput();
-            return (hidKeysDown() & KEY_B) != 0;
-        },
-        nullptr);
+        [](void *) { return n3ds_ui_wait_cancel_polled(); }, nullptr);
     const int result = gs_pair(server, pin);
     http_set_cancel_callback(nullptr, nullptr);
-    http_set_timeout_s(60);
+    http_set_timeout_s(90);
 
     if (result == GS_OK) {
         add_pair_address(host.address, host.port);
@@ -1270,8 +1266,16 @@ void pair_host(PCONFIGURATION config, PSERVER_DATA server,
         show_message("Pairing Cancelled",
                      "The pairing request was cancelled. No host was saved.");
     } else {
-        show_message("Pairing Failed",
-                     gs_error != nullptr ? gs_error : "Unknown pairing error");
+        std::string error =
+            gs_error != nullptr ? gs_error : "Unknown pairing error";
+        if (error.find("Timeout") != std::string::npos ||
+            error.find("timeout") != std::string::npos) {
+            error =
+                "Timeout after PIN.\n\nThe 3DS is slow to finish HTTPS "
+                "pairing. Enter the PIN as soon as it appears, leave this "
+                "screen open, then try Pair again if needed.";
+        }
+        show_message("Pairing Failed", error);
     }
 }
 
@@ -1283,15 +1287,26 @@ bool connect_host(PCONFIGURATION config, PSERVER_DATA server,
         return false;
     }
 
-    n3ds_ui_status("Connecting", host.address, {"Opening session..."},
-                   "Please wait");
+    n3ds_ui_connect_wait("Connecting", host.address,
+                         {"Opening GameStream session...",
+                          "Disconnect to abort"});
 
     gs_cleanup();
     config->address = const_cast<char *>(host.address.c_str());
     config->port = host.port;
+    http_set_timeout_s(90);
+    http_set_cancel_callback(
+        [](void *) { return n3ds_ui_wait_cancel_polled(); }, nullptr);
 
     const int status = gs_init(server, config->address, config->port,
                                config->key_dir, 0, config->unsupported);
+    http_set_cancel_callback(nullptr, nullptr);
+
+    if (status == GS_CANCELLED) {
+        show_message("Disconnected",
+                     "Connection cancelled. No host session was opened.");
+        return false;
+    }
     if (status != GS_OK) {
         show_message("Host Unavailable",
                      gs_error != nullptr ? gs_error

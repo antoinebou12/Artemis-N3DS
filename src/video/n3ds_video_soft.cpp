@@ -20,6 +20,7 @@
 #include "ffmpeg.h"
 #include "video.hpp"
 
+#include "../graphics_lifecycle.hpp"
 #include "../util.h"
 
 #include <3ds.h>
@@ -132,8 +133,10 @@ inline int SoftVideoDecoder::_write_yuv_to_framebuffer(const u8 **source,
     svcCloseHandle(conversion_finish_event_handle);
 
     renderer_lock.lock();
-    renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
-    renderer->write_px_to_framebuffer(rgb_img_buffer);
+    if (renderer != nullptr && n3ds_stream_render_active()) {
+        renderer->set_perf_decode_ticks(svcGetSystemTick() - start_ticks);
+        renderer->write_px_to_framebuffer(rgb_img_buffer);
+    }
     renderer_lock.unlock();
 
     return DR_OK;

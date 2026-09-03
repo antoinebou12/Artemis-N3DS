@@ -71,9 +71,9 @@ jobs:
 
       - name: Verify release artifacts
         run: |
-          test -s antoinebou12.cia
-          test -s antoinebou12.3dsx
-          ls -lh antoinebou12.cia antoinebou12.3dsx
+          test -s artemis.cia
+          test -s artemis.3dsx
+          ls -lh artemis.cia artemis.3dsx
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -82,5 +82,5 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            antoinebou12.cia
-            antoinebou12.3dsx
+            artemis.cia
+            artemis.3dsx

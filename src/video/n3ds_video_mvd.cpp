@@ -18,6 +18,7 @@
  */
 
 #include "video.hpp"
+#include "../graphics_lifecycle.hpp"
 #include "../hardware_capabilities.hpp"
 #include "../stream_telemetry.hpp"
 #include "../stream_telemetry_store.hpp"
@@ -109,7 +110,6 @@ MvdDecoder::~MvdDecoder() {
     mvdstdExit();
     linearFree(nal_unit_buffer);
     linearFree(rgb_img_buffer);
-    printf("Video decoder shutdown successfully\n");
 }
 
 DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
@@ -195,23 +195,27 @@ int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
     }
 
     renderer_lock.lock();
-    renderer->set_perf_decode_ticks(decode_end_ticks - decode_start_ticks);
-    const u64 render_start_ticks = svcGetSystemTick();
-    renderer->write_px_to_framebuffer(rgb_img_buffer);
-    const u64 present_ticks = svcGetSystemTick();
-    renderer_lock.unlock();
+    if (renderer != nullptr && n3ds_stream_render_active()) {
+        renderer->set_perf_decode_ticks(decode_end_ticks - decode_start_ticks);
+        const u64 render_start_ticks = svcGetSystemTick();
+        renderer->write_px_to_framebuffer(rgb_img_buffer);
+        const u64 present_ticks = svcGetSystemTick();
+        renderer_lock.unlock();
 
-    StreamTelemetrySample sample{};
-    sample.decode_ms = ticks_to_ms(decode_end_ticks - decode_start_ticks);
-    sample.render_ms = ticks_to_ms(present_ticks - render_start_ticks);
-    if (last_present_ticks != 0) {
-        sample.frame_ms = ticks_to_ms(present_ticks - last_present_ticks);
-        if (sample.frame_ms > 0.0f) {
-            sample.fps = 1000.0f / sample.frame_ms;
+        StreamTelemetrySample sample{};
+        sample.decode_ms = ticks_to_ms(decode_end_ticks - decode_start_ticks);
+        sample.render_ms = ticks_to_ms(present_ticks - render_start_ticks);
+        if (last_present_ticks != 0) {
+            sample.frame_ms = ticks_to_ms(present_ticks - last_present_ticks);
+            if (sample.frame_ms > 0.0f) {
+                sample.fps = 1000.0f / sample.frame_ms;
+            }
         }
+        push_global_stream_telemetry(sample);
+        last_present_ticks = present_ticks;
+    } else {
+        renderer_lock.unlock();
     }
-    push_global_stream_telemetry(sample);
-    last_present_ticks = present_ticks;
 
     if (first_frame) {
         first_frame = false;

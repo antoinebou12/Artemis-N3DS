@@ -1,4 +1,4 @@
-# Moonlight 3DS SD Card Data
+# Artemis 3DS SD Card Data
 
 Runtime user data lives on the **3DS SD card**, not in this repository.
 
@@ -9,6 +9,8 @@ All files are under:
 ```
 sd:/3ds/moonlight/
 ```
+
+(Legacy path name kept so existing pairing and settings continue to work.)
 
 ## Layout
 
@@ -24,9 +26,9 @@ sd:/3ds/moonlight/
 
 ## For developers
 
-- **`dist/` is for release packages only** — `moonlight.3dsx`, `moonlight.cia`, and install docs.
+- **`dist/` is for release packages only** — `artemis.3dsx`, `artemis.cia`, and install docs.
 - **Never copy SD card contents into `dist/`** or commit pairing keys to git.
-- When building releases, copy only the `.3dsx` / `.cia` binaries and documentation.
+- When building releases, copy only the Artemis `.3dsx` / `.cia` binaries and documentation.
 
 ## Remove host vs unpair
 

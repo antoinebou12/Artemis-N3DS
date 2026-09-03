@@ -50,3 +50,20 @@ void n3ds_ui_message(const std::string &title, const std::string &message,
 void n3ds_ui_status(const std::string &title, const std::string &subtitle,
                     const std::vector<std::string> &lines,
                     const std::string &hint);
+
+// Pair Host wait screen: large PIN on top, Cancel on the bottom action bar.
+void n3ds_ui_pair_wait(const std::string &title, const std::string &subtitle,
+                       const std::string &pin,
+                       const std::vector<std::string> &lines);
+
+// Connecting wait screen: status on top, Disconnect on the bottom action bar.
+void n3ds_ui_connect_wait(const std::string &title, const std::string &subtitle,
+                          const std::vector<std::string> &lines);
+
+// Poll B / Cancel|Disconnect touch while curl blocks. Redraws the wait UI.
+bool n3ds_ui_wait_cancel_polled();
+
+// Alias used by pairing; same as n3ds_ui_wait_cancel_polled.
+inline bool n3ds_ui_pair_cancel_polled() {
+    return n3ds_ui_wait_cancel_polled();
+}

@@ -17,17 +17,20 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "../../presentation_state.hpp"
+#include "../../stream_benchmark.hpp"
+#include "../../stream_telemetry_store.hpp"
 #include "../../system/dispatcher.hpp"
 #include "TouchHandler.hpp"
+#include "select_menu_layout.hpp"
+#include "stream_bottom_ui.hpp"
 #include <Limelight.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 
 namespace {
-constexpr int kButtonHeight = 60;
-constexpr int kButtonWidth = 160;
 constexpr int kNavThreshold = 45;
 constexpr int kPageSwipeThreshold = 48;
 constexpr u64 kInitialRepeat =
@@ -42,6 +45,8 @@ enum class MenuTileKind {
     ZoomIn,
     ZoomOut,
     ZoomReset,
+    SaveCsv,
+    Empty,
 };
 
 struct MenuTile {
@@ -52,43 +57,46 @@ struct MenuTile {
 };
 
 const MenuTile kInputPage[4][2] = {
-    {{"GAMEPAD", MenuTileKind::TouchMode, N3dsTouchType::GAMEPAD},
-     {"MOUSE", MenuTileKind::TouchMode, N3dsTouchType::MOUSEPAD}},
-    {{"KEYBOARD", MenuTileKind::TouchMode, N3dsTouchType::KEYBOARD},
-     {"ABS TOUCH", MenuTileKind::TouchMode, N3dsTouchType::ABSOLUTE_TOUCH}},
-    {{"DS STRETCH", MenuTileKind::TouchMode, N3dsTouchType::DS_TOUCH},
-     {"MAGNIFY", MenuTileKind::TouchMode, N3dsTouchType::MAGNIFY_TOUCH}},
-    {{"PERF", MenuTileKind::Performance},
-     {"QUIT", MenuTileKind::Exit}},
+    {{"Gamepad", MenuTileKind::TouchMode, N3dsTouchType::GAMEPAD},
+     {"Mouse", MenuTileKind::TouchMode, N3dsTouchType::MOUSEPAD}},
+    {{"Keyboard", MenuTileKind::TouchMode, N3dsTouchType::KEYBOARD},
+     {"Mirror", MenuTileKind::TouchMode, N3dsTouchType::ABSOLUTE_TOUCH}},
+    {{"Magnify", MenuTileKind::TouchMode, N3dsTouchType::MAGNIFY_TOUCH},
+     {"Stretch", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+      PresentationMode::Stretch}},
+    {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
 };
 
 const MenuTile kDisplayPage[4][2] = {
-    {{"FIT", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+    {{"Fit", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Fit},
-     {"FILL", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+     {"Fill", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Fill}},
-    {{"STRETCH", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+    {{"Stretch", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Stretch},
      {"SBS", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::StereoSideBySide}},
-    {{"ZOOM+", MenuTileKind::ZoomIn},
-     {"ZOOM-", MenuTileKind::ZoomOut}},
-    {{"RESET", MenuTileKind::ZoomReset},
-     {"QUIT", MenuTileKind::Exit}},
+    {{"Zoom+", MenuTileKind::ZoomIn}, {"Zoom-", MenuTileKind::ZoomOut}},
+    {{"Reset", MenuTileKind::ZoomReset}, {"", MenuTileKind::Empty}},
 };
 
-const MenuTile &tile_at(int page, int row, int col) {
-    return page == 0 ? kInputPage[row][col] : kDisplayPage[row][col];
-}
+const MenuTile kSessionPage[4][2] = {
+    {{"Perf", MenuTileKind::Performance}, {"Save", MenuTileKind::SaveCsv}},
+    {{"Quit", MenuTileKind::Exit}, {"", MenuTileKind::Empty}},
+    {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
+    {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
+};
 
-void print_tile(const char *label, bool selected, bool pressed) {
-    if (pressed) {
-        std::printf("[%-14s]", label);
-    } else if (selected) {
-        std::printf(">%-14s<", label);
-    } else {
-        std::printf(" %-14s ", label);
+const char *kTabLabels[3] = {"INPUT", "DISPLAY", "SESSION"};
+
+const MenuTile &tile_at(int page, int row, int col) {
+    if (page == 1) {
+        return kDisplayPage[row][col];
     }
+    if (page == 2) {
+        return kSessionPage[row][col];
+    }
+    return kInputPage[row][col];
 }
 
 int strongest_axis(int a, int b) {
@@ -134,7 +142,23 @@ void reset_stream_zoom() {
     set_global_presentation_state(state);
 }
 
-std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile) {
+bool tile_is_live(const MenuTile &tile, const PresentationState &state) {
+    if (tile.kind == MenuTileKind::Presentation) {
+        return tile.presentation == state.mode;
+    }
+    if (tile.kind == MenuTileKind::TouchMode &&
+        tile.touch_type == N3dsTouchType::MAGNIFY_TOUCH) {
+        return state.mode == PresentationMode::Magnify;
+    }
+    if (tile.kind == MenuTileKind::ZoomIn || tile.kind == MenuTileKind::ZoomOut ||
+        tile.kind == MenuTileKind::ZoomReset) {
+        return state.mode == PresentationMode::Magnify;
+    }
+    return false;
+}
+
+std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile,
+                                           bool apply_side_effects) {
     switch (tile.kind) {
     case MenuTileKind::Exit:
         return std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM);
@@ -142,94 +166,171 @@ std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile) {
         return std::make_shared<TouchStateChangedMsg>(
             N3dsTouchType::PERFORMANCE_TOUCH);
     case MenuTileKind::TouchMode:
+        if (apply_side_effects &&
+            tile.touch_type == N3dsTouchType::MAGNIFY_TOUCH) {
+            apply_presentation_mode(PresentationMode::Magnify);
+        }
         return std::make_shared<TouchStateChangedMsg>(tile.touch_type);
     case MenuTileKind::Presentation:
-        apply_presentation_mode(tile.presentation);
+        if (apply_side_effects) {
+            apply_presentation_mode(tile.presentation);
+        }
         return nullptr;
     case MenuTileKind::ZoomIn:
-        adjust_stream_zoom(0.25f);
+        if (apply_side_effects) {
+            adjust_stream_zoom(0.25f);
+        }
         return nullptr;
     case MenuTileKind::ZoomOut:
-        adjust_stream_zoom(-0.25f);
+        if (apply_side_effects) {
+            adjust_stream_zoom(-0.25f);
+        }
         return nullptr;
     case MenuTileKind::ZoomReset:
-        reset_stream_zoom();
+        if (apply_side_effects) {
+            reset_stream_zoom();
+        }
+        return nullptr;
+    case MenuTileKind::SaveCsv:
+        if (apply_side_effects) {
+            char path[96] = {0};
+            export_stream_benchmark_csv(path, sizeof(path));
+        }
+        return nullptr;
+    case MenuTileKind::Empty:
         return nullptr;
     }
     return nullptr;
+}
+
+void paint_select_menu(int page, int selected_row, int selected_col,
+                       int pressed_row, int pressed_col) {
+    using namespace StreamUi;
+    const BottomCanvas canvas = lock_bottom_canvas();
+    if (!canvas.ready()) {
+        return;
+    }
+
+    const PresentationState presentation = global_presentation_state();
+    const auto summary = global_stream_telemetry_summary();
+    canvas.clear();
+
+    char status[40];
+    std::snprintf(status, sizeof(status), "%s %.1fx %3.0ff",
+                  presentation_mode_name(presentation.mode), presentation.zoom,
+                  summary.avg_fps);
+    draw_header(canvas, "SELECT", status);
+
+    for (int tab = 0; tab < SelectMenuLayout::tabs; ++tab) {
+        const int x = SelectMenuLayout::tab_x(tab);
+        const bool active = page == tab;
+        canvas.round_fill(x, SelectMenuLayout::header_h,
+                          SelectMenuLayout::tab_width(),
+                          SelectMenuLayout::tab_h - 2,
+                          active ? kColAccent : kColRaised);
+        canvas.text_centered(kTabLabels[tab], x,
+                             SelectMenuLayout::header_h + 4,
+                             SelectMenuLayout::tab_width(),
+                             active ? kColDark : kColMuted, 1);
+    }
+
+    for (int row = 0; row < SelectMenuLayout::rows; ++row) {
+        for (int col = 0; col < SelectMenuLayout::cols; ++col) {
+            const MenuTile &tile = tile_at(page, row, col);
+            if (tile.kind == MenuTileKind::Empty || tile.label[0] == '\0') {
+                continue;
+            }
+            draw_card(canvas, SelectMenuLayout::tile_x(col),
+                      SelectMenuLayout::tile_y(row),
+                      SelectMenuLayout::tile_width(),
+                      SelectMenuLayout::tile_height(), tile.label,
+                      row == selected_row && col == selected_col,
+                      row == pressed_row && col == pressed_col,
+                      tile_is_live(tile, presentation),
+                      tile.kind == MenuTileKind::Exit);
+        }
+    }
+
+    if (page == 2) {
+        char chip[48];
+        std::snprintf(chip, sizeof(chip), "BR %luk DROP %lu",
+                      static_cast<unsigned long>(summary.bitrate_kbps),
+                      static_cast<unsigned long>(summary.dropped_frames));
+        canvas.round_fill(6, SelectMenuLayout::tile_y(2), 308,
+                          SelectMenuLayout::tile_height(), kColRaised);
+        canvas.text_centered(chip, 6,
+                             SelectMenuLayout::tile_y(2) +
+                                 (SelectMenuLayout::tile_height() - 7) / 2,
+                             308, kColText, 1);
+        std::snprintf(chip, sizeof(chip), "DEC %.1f REN %.1f",
+                      summary.avg_decode_ms, summary.avg_render_ms);
+        canvas.round_fill(6, SelectMenuLayout::tile_y(3), 308,
+                          SelectMenuLayout::tile_height(), kColSurface);
+        canvas.text_centered(chip, 6,
+                             SelectMenuLayout::tile_y(3) +
+                                 (SelectMenuLayout::tile_height() - 7) / 2,
+                             308, kColMuted, 1);
+    }
+
+    draw_footer_three(canvas, "B HUB", "L/R TAB", "A OPEN");
+    canvas.present();
+}
+
+bool tile_leaves_menu(const MenuTile &tile) {
+    return tile.kind == MenuTileKind::Exit || tile.kind == MenuTileKind::TouchMode ||
+           tile.kind == MenuTileKind::Performance;
 }
 } // namespace
 
 MenuTouchHandler::MenuTouchHandler() {
     aptSetHomeAllowed(true);
-    redraw(true);
+    paint_page();
 }
 
-MenuTouchHandler::~MenuTouchHandler() {
-    consoleSelect(&DebugTouchHandler::topScreen);
-    aptSetHomeAllowed(false);
-}
+MenuTouchHandler::~MenuTouchHandler() { aptSetHomeAllowed(false); }
 
-void MenuTouchHandler::redraw(bool force) {
-    const u64 now = svcGetSystemTick();
-    if (!force && last_redraw_ticks != 0 &&
-        now - last_redraw_ticks < (SYSCLOCK_ARM11 / 10)) {
-        return;
-    }
-    last_redraw_ticks = now;
-
-    consoleSelect(&DebugTouchHandler::bottomScreen);
-    consoleClear();
-    std::printf("HOME/SELECT: menu  L/R: page %d/2 %s\n", page + 1,
-                page == 0 ? "INPUT" : "DISPLAY");
-    std::printf("L3/R3 on pad = host sticks  A:ok B:pad\n");
-
-    for (int row = 0; row < 4; ++row) {
-        const bool left_pressed = active_row == row && active_col == 0;
-        const bool right_pressed = active_row == row && active_col == 1;
-        const MenuTile &left = tile_at(page, row, 0);
-        const MenuTile &right = tile_at(page, row, 1);
-        std::printf("\n");
-        print_tile(left.label, selected_row == row && selected_col == 0,
-                   left_pressed);
-        print_tile(right.label, selected_row == row && selected_col == 1,
-                   right_pressed);
-        std::printf("\n");
-    }
-
-    if (page == 1) {
-        std::printf("\nMode: %s  Zoom: %.1fx\n",
-                    presentation_mode_name(global_presentation_state().mode),
-                    global_presentation_state().zoom);
-    }
+void MenuTouchHandler::paint_page() {
+    paint_select_menu(page, selected_row, selected_col, active_row, active_col);
 }
 
 void MenuTouchHandler::move_selection(int dx, int dy) {
-    const int old_row = selected_row;
-    const int old_col = selected_col;
     selected_row = std::clamp(selected_row + dy, 0, 3);
     selected_col = std::clamp(selected_col + dx, 0, 1);
-    if (old_row != selected_row || old_col != selected_col) {
-        redraw(true);
+    // Skip empty tiles when moving.
+    for (int guard = 0; guard < 8; ++guard) {
+        const MenuTile &tile = tile_at(page, selected_row, selected_col);
+        if (tile.kind != MenuTileKind::Empty && tile.label[0] != '\0') {
+            break;
+        }
+        if (dx != 0) {
+            selected_col = std::clamp(selected_col + dx, 0, 1);
+        } else {
+            selected_row = std::clamp(selected_row + (dy == 0 ? 1 : dy), 0, 3);
+        }
     }
+    paint_page();
 }
 
 void MenuTouchHandler::activate_selected() {
     const MenuTile &tile = tile_at(page, selected_row, selected_col);
-    if (std::shared_ptr<IMessage> next_message = message_for_tile(tile);
+    if (tile.kind == MenuTileKind::Empty) {
+        return;
+    }
+    if (std::shared_ptr<IMessage> next_message =
+            message_for_tile(tile, true);
         next_message != nullptr) {
         MessageDispatcher::get_instance()->post(next_message);
     } else {
-        redraw(true);
+        paint_page();
     }
 }
 
 void MenuTouchHandler::handle_navigation(u32 keys_down,
                                          const circlePosition &cpad,
                                          const circlePosition &cstick) {
+    // Already on the hub: B is a no-op (stay on SELECT).
     if (keys_down & KEY_B) {
-        MessageDispatcher::get_instance()->post(
-            std::make_shared<TouchStateChangedMsg>(N3dsTouchType::GAMEPAD));
+        paint_page();
         return;
     }
     if (keys_down & KEY_X) {
@@ -239,17 +340,11 @@ void MenuTouchHandler::handle_navigation(u32 keys_down,
         return;
     }
     if (keys_down & KEY_L) {
-        page = (page + 1) % 2;
-        selected_row = 0;
-        selected_col = 0;
-        redraw(true);
+        change_page(-1);
         return;
     }
     if (keys_down & KEY_R) {
-        page = (page + 1) % 2;
-        selected_row = 0;
-        selected_col = 0;
-        redraw(true);
+        change_page(1);
         return;
     }
     if (keys_down & KEY_A) {
@@ -314,9 +409,18 @@ void MenuTouchHandler::update_touch_target(touchPosition touch) {
     touch.py = touch.py < GSP_SCREEN_WIDTH ? touch.py : (touch.py - 1);
     touch.px = touch.px < GSP_SCREEN_HEIGHT_BOTTOM ? touch.px : (touch.px - 1);
 
-    const int row = touch.py / kButtonHeight;
-    const int col = touch.px / kButtonWidth;
-    if (row < 0 || row > 3 || col < 0 || col > 1) {
+    int row = -1;
+    int col = -1;
+    const auto hit = SelectMenuLayout::hit(touch.px, touch.py, row, col);
+    if (hit != SelectMenuLayout::Hit::Tile) {
+        active_row = -1;
+        active_col = -1;
+        message = nullptr;
+        return;
+    }
+
+    const MenuTile &tile = tile_at(page, row, col);
+    if (tile.kind == MenuTileKind::Empty) {
         active_row = -1;
         active_col = -1;
         message = nullptr;
@@ -325,56 +429,117 @@ void MenuTouchHandler::update_touch_target(touchPosition touch) {
 
     active_row = row;
     active_col = col;
-    selected_row = row;
-    selected_col = col;
-    message = message_for_tile(tile_at(page, row, col));
+    if (selected_row != row || selected_col != col) {
+        selected_row = row;
+        selected_col = col;
+        paint_page();
+    }
+    message = message_for_tile(tile, false);
 }
 
 void MenuTouchHandler::change_page(int delta) {
-    page = (page + delta + 2) % 2;
+    page = (page + delta + SelectMenuLayout::tabs) % SelectMenuLayout::tabs;
     selected_row = 0;
     selected_col = 0;
-    redraw(true);
+    // Land on first non-empty tile.
+    for (int r = 0; r < 4; ++r) {
+        for (int c = 0; c < 2; ++c) {
+            const MenuTile &tile = tile_at(page, r, c);
+            if (tile.kind != MenuTileKind::Empty && tile.label[0] != '\0') {
+                selected_row = r;
+                selected_col = c;
+                paint_page();
+                return;
+            }
+        }
+    }
+    paint_page();
 }
 
 void MenuTouchHandler::_handle_touch_down(touchPosition touch) {
     touch_start_x = touch.px;
     touch_page_swipe = false;
     update_touch_target(touch);
-    redraw(true);
+    paint_page();
 }
 
 void MenuTouchHandler::_handle_touch_up(touchPosition touch) {
     const int pressed_row = active_row;
     const int pressed_col = active_col;
     const int swipe_dx = touch.px - touch_start_x;
+    bool left_menu = false;
+
     if (touch_page_swipe || std::abs(swipe_dx) >= kPageSwipeThreshold) {
         change_page(swipe_dx < 0 ? 1 : -1);
     } else {
-        update_touch_target(touch);
-        if (message != nullptr && active_row == pressed_row &&
-            active_col == pressed_col) {
-            MessageDispatcher::get_instance()->post(message);
+        int row = -1;
+        int col = -1;
+        const auto hit = SelectMenuLayout::hit(touch.px, touch.py, row, col);
+        switch (hit) {
+        case SelectMenuLayout::Hit::Tab0:
+            page = 0;
+            selected_row = 0;
+            selected_col = 0;
+            break;
+        case SelectMenuLayout::Hit::Tab1:
+            page = 1;
+            selected_row = 0;
+            selected_col = 0;
+            break;
+        case SelectMenuLayout::Hit::Tab2:
+            page = 2;
+            selected_row = 0;
+            selected_col = 0;
+            break;
+        case SelectMenuLayout::Hit::FooterBack:
+            paint_page();
+            break;
+        case SelectMenuLayout::Hit::FooterPage:
+            change_page(1);
+            break;
+        case SelectMenuLayout::Hit::FooterOpen: {
+            const MenuTile &tile = tile_at(page, selected_row, selected_col);
+            if (tile_leaves_menu(tile)) {
+                left_menu = true;
+            }
+            activate_selected();
+            break;
+        }
+        case SelectMenuLayout::Hit::None:
+        case SelectMenuLayout::Hit::Tile:
+        default:
+            update_touch_target(touch);
+            if (active_row == pressed_row && active_col == pressed_col &&
+                pressed_row >= 0) {
+                const MenuTile &tile =
+                    tile_at(page, pressed_row, pressed_col);
+                if (std::shared_ptr<IMessage> next_message =
+                        message_for_tile(tile, true);
+                    next_message != nullptr) {
+                    MessageDispatcher::get_instance()->post(next_message);
+                    left_menu = true;
+                }
+            }
+            break;
         }
     }
+
     message = nullptr;
     active_row = -1;
     active_col = -1;
-    redraw(true);
+    if (!left_menu) {
+        paint_page();
+    }
 }
 
 void MenuTouchHandler::_handle_touch_hold(touchPosition touch) {
-    const int old_row = active_row;
-    const int old_col = active_col;
     const int swipe_dx = touch.px - touch_start_x;
     if (std::abs(swipe_dx) >= kPageSwipeThreshold) {
         touch_page_swipe = true;
         active_row = -1;
         active_col = -1;
         message = nullptr;
-        redraw(false);
         return;
     }
     update_touch_target(touch);
-    redraw(old_row != active_row || old_col != active_col);
 }

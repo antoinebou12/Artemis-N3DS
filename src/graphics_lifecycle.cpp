@@ -1,6 +1,7 @@
 #include "graphics_lifecycle.hpp"
 
 #include <3ds.h>
+#include <atomic>
 #include <stdio.h>
 #include <cstring>
 
@@ -11,74 +12,45 @@ C3D_RenderTarget *g_bottom_target = nullptr;
 C2D_TextBuf g_text_buffer = nullptr;
 bool g_c3d_initialized = false;
 bool g_c2d_initialized = false;
+std::atomic<bool> g_stream_render_active{true};
+
+void wait_vblanks(int count) {
+    for (int i = 0; i < count; ++i) {
+        gspWaitForVBlank();
+    }
+}
 
 void wait_gpu_idle() {
     if (!g_c3d_initialized && !g_c2d_initialized) {
         return;
     }
-    gspWaitForP3D();
-    gspWaitForPPF();
+    // Never wait on P3D/PPF here: a missed GPU event hangs QUIT forever.
+    wait_vblanks(2);
 }
 
-void wait_gpu_idle_unconditional() {
-    gspWaitForP3D();
-    gspWaitForPPF();
-    for (int i = 0; i < 3; ++i) {
-        gspWaitForVBlank();
-    }
-}
-
-void clear_gfx_screen(gfxScreen_t screen, u16 rgb565_color) {
-    const int width = GSP_SCREEN_WIDTH;
-    const int height = screen == GFX_TOP ? GSP_SCREEN_HEIGHT_TOP
-                                         : GSP_SCREEN_HEIGHT_BOTTOM;
+void clear_gfx_screen(gfxScreen_t screen) {
     u8 *framebuffer = gfxGetFramebuffer(screen, GFX_LEFT, nullptr, nullptr);
     if (framebuffer == nullptr) {
         return;
     }
-
+    const int width = GSP_SCREEN_WIDTH;
+    const int height = screen == GFX_TOP ? GSP_SCREEN_HEIGHT_TOP
+                                         : GSP_SCREEN_HEIGHT_BOTTOM;
     const int pixel_size = gspGetBytesPerPixel(gfxGetScreenFormat(screen));
-    if (pixel_size == 2) {
-        u16 *pixels = reinterpret_cast<u16 *>(framebuffer);
-        for (int i = 0; i < width * height; ++i) {
-            pixels[i] = rgb565_color;
-        }
-    } else if (pixel_size == 3) {
-        const u8 red = static_cast<u8>((rgb565_color >> 11) & 0x1F) << 3;
-        const u8 green =
-            static_cast<u8>((rgb565_color >> 5) & 0x3F) << 2;
-        const u8 blue = static_cast<u8>(rgb565_color & 0x1F) << 3;
-        for (int y = 0; y < height; ++y) {
-            u8 *row = framebuffer + y * width * 3;
-            for (int x = 0; x < width; ++x) {
-                row[x * 3 + 0] = blue;
-                row[x * 3 + 1] = green;
-                row[x * 3 + 2] = red;
-            }
-        }
-    } else {
-        std::memset(framebuffer, 0, width * height * pixel_size);
-    }
-
-    gfxScreenSwapBuffers(screen, true);
+    std::memset(framebuffer, 0, width * height * pixel_size);
+    gfxScreenSwapBuffers(screen, false);
 }
 
 void reset_stream_gfx_state() {
-    printf("[gfx] Waiting for stream GPU work to finish\n");
-    wait_gpu_idle_unconditional();
-
     if (gfxIs3D()) {
-        printf("[gfx] Disabling stereoscopic output\n");
         gfxSet3D(false);
     }
     gfxSetWide(false);
-
-    const u16 background = RGB565(13, 17, 23);
-    printf("[gfx] Clearing top and bottom framebuffers\n");
-    clear_gfx_screen(GFX_TOP, background);
-    clear_gfx_screen(GFX_BOTTOM, background);
+    wait_vblanks(2);
+    clear_gfx_screen(GFX_TOP);
+    clear_gfx_screen(GFX_BOTTOM);
     gfxFlushBuffers();
-    gspWaitForVBlank();
+    wait_vblanks(1);
 }
 
 void release_shell_resources() {
@@ -112,6 +84,30 @@ void configure_stream_framebuffers() {
     gfxSetDoubleBuffering(GFX_TOP, false);
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
 }
+
+bool try_init_shell_targets() {
+    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) {
+        return false;
+    }
+    g_c3d_initialized = true;
+
+    if (!C2D_Init(C2D_DEFAULT_MAX_OBJECTS)) {
+        release_shell_resources();
+        return false;
+    }
+    g_c2d_initialized = true;
+
+    C2D_Prepare();
+    g_top_target = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
+    g_bottom_target = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
+    g_text_buffer = C2D_TextBufNew(16384);
+    if (g_top_target == nullptr || g_bottom_target == nullptr ||
+        g_text_buffer == nullptr) {
+        release_shell_resources();
+        return false;
+    }
+    return true;
+}
 } // namespace
 
 bool n3ds_graphics_acquire_shell() {
@@ -125,48 +121,26 @@ bool n3ds_graphics_acquire_shell() {
     }
 
     release_shell_resources();
-    wait_gpu_idle_unconditional();
+    wait_vblanks(2);
     gfxSetScreenFormat(GFX_TOP, GSP_BGR8_OES);
     gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_TOP, true);
     gfxSetDoubleBuffering(GFX_BOTTOM, true);
 
-    if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) {
-        printf("[gfx] ERROR: C3D_Init failed while restoring shell\n");
-        configure_stream_framebuffers();
-        g_state.acquire_stream();
-        return false;
-    }
-    g_c3d_initialized = true;
-
-    if (!C2D_Init(C2D_DEFAULT_MAX_OBJECTS)) {
-        printf("[gfx] ERROR: C2D_Init failed while restoring shell\n");
-        release_shell_resources();
-        configure_stream_framebuffers();
-        g_state.acquire_stream();
-        return false;
-    }
-    g_c2d_initialized = true;
-
-    C2D_Prepare();
-    g_top_target = C2D_CreateScreenTarget(GFX_TOP, GFX_LEFT);
-    g_bottom_target = C2D_CreateScreenTarget(GFX_BOTTOM, GFX_LEFT);
-    g_text_buffer = C2D_TextBufNew(16384);
-    if (g_top_target == nullptr || g_bottom_target == nullptr ||
-        g_text_buffer == nullptr) {
-        printf("[gfx] ERROR: Failed to allocate Citro2D shell targets\n");
-        release_shell_resources();
+    if (!try_init_shell_targets()) {
+        printf("[gfx] ERROR: Citro2D shell restore failed\n");
         configure_stream_framebuffers();
         g_state.acquire_stream();
         return false;
     }
 
     g_state.acquire_shell();
-    printf("[gfx] Artemis shell graphics ready\n");
     return true;
 }
 
 void n3ds_graphics_reset_after_stream() {
+    aptSetHomeAllowed(true);
+    n3ds_stream_render_abort();
     if (g_state.mode() != GraphicsMode::Stream) {
         return;
     }
@@ -176,15 +150,21 @@ void n3ds_graphics_reset_after_stream() {
 
 void n3ds_graphics_acquire_stream() {
     if (g_state.mode() == GraphicsMode::Stream) {
+        g_stream_render_active.store(true);
         return;
     }
-    printf("[gfx] Handing GPU to stream renderer\n");
     release_shell_resources();
     configure_stream_framebuffers();
+    g_stream_render_active.store(true);
     g_state.acquire_stream();
 }
 
+void n3ds_stream_render_abort() { g_stream_render_active.store(false); }
+
+bool n3ds_stream_render_active() { return g_stream_render_active.load(); }
+
 void n3ds_graphics_shutdown() {
+    n3ds_stream_render_abort();
     release_shell_resources();
     g_state.shutdown();
 }

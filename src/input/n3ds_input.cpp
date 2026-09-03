@@ -79,7 +79,6 @@ N3dsInput::~N3dsInput() {
     previous_state = GAMEPAD_STATE();
     touch_handler = nullptr;
     aptSetHomeAllowed(true);
-    printf("Input handler shutdown successfully\n");
 }
 
 void N3dsInput::accept(IMessage *msg) {
@@ -180,14 +179,13 @@ void N3dsInput::n3dsinput_handle_event() {
 
     touch_handler->n3dsinput_handle_touch(kDown, kUp);
 
-    // HOME and SELECT open the local Quick Actions surface. Neither should be
-    // forwarded to the remote host while opening the menu.
+    // HOME and SELECT always open the SELECT hub, even from perf/magnify.
     if (aptCheckHomePressRejected()) {
         if (!menu_active) {
             touch_handler->open_menu();
             menu_active = true;
         }
-    } else if ((kDown & KEY_SELECT) && !touch_handler->captures_gamepad_input()) {
+    } else if (kDown & KEY_SELECT) {
         touch_handler->open_menu();
         menu_active = true;
     } else {

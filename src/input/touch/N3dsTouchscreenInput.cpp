@@ -27,8 +27,8 @@ N3dsTouchscreenInput::N3dsTouchscreenInput(GAMEPAD_STATE *gamepad_in,
       image_height(image_height_in) {
     MessageDispatcher::get_instance()->subscribe(
         MessageType::TOUCH_STATE_CHANGED, this);
-    _n3dsinput_set_touch(N3dsTouchType::GAMEPAD);
-    next_touch_type.store(N3dsTouchType::GAMEPAD);
+    _n3dsinput_set_touch(N3dsTouchType::MENU_TOUCH);
+    next_touch_type.store(N3dsTouchType::MENU_TOUCH);
 };
 
 N3dsTouchscreenInput::~N3dsTouchscreenInput() {
@@ -46,6 +46,19 @@ void N3dsTouchscreenInput::accept(IMessage *msg) {
 }
 
 void N3dsTouchscreenInput::_n3dsinput_set_touch(N3dsTouchType touch_type_in) {
+    // Already on the SELECT hub: recreate the handler only to force a fresh
+    // paint (cheap). Skip when open_menu races with an identical message.
+    if (touch_type_in == touch_type && handler != nullptr &&
+        touch_type_in != N3dsTouchType::MENU_TOUCH) {
+        return;
+    }
+    if (touch_type_in == touch_type && touch_type_in == N3dsTouchType::MENU_TOUCH &&
+        handler != nullptr) {
+        // Repaint without tearing down input navigation state if possible.
+        handler = std::make_unique<MenuTouchHandler>();
+        return;
+    }
+
     switch (touch_type_in) {
     case N3dsTouchType::GAMEPAD:
         handler = std::make_unique<GamepadTouchHandler>(gamepad_state);
@@ -117,6 +130,8 @@ bool N3dsTouchscreenInput::captures_gamepad_input() const {
 }
 
 void N3dsTouchscreenInput::open_menu() {
+    MessageDispatcher::get_instance()->post(
+        std::make_shared<TouchStateChangedMsg>(N3dsTouchType::MENU_TOUCH));
     next_touch_type.store(N3dsTouchType::MENU_TOUCH);
     _n3dsinput_set_touch(N3dsTouchType::MENU_TOUCH);
 }

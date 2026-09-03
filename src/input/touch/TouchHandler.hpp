@@ -94,7 +94,7 @@ class MenuTouchHandler : public TouchHandlerBase {
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
     void _handle_touch_hold(touchPosition touch) override;
-    void redraw(bool force = false);
+    void paint_page();
     void update_touch_target(touchPosition touch);
     void activate_selected();
     void move_selection(int dx, int dy);
@@ -102,7 +102,6 @@ class MenuTouchHandler : public TouchHandlerBase {
 
   private:
     std::shared_ptr<IMessage> message = nullptr;
-    u64 last_redraw_ticks = 0;
     u64 next_nav_repeat_ticks = 0;
     int active_row = -1;
     int active_col = -1;
@@ -140,12 +139,13 @@ class PerformanceTouchHandler : public TouchHandlerBase {
 class GamepadTouchHandler : public TouchHandlerBase {
   public:
     GamepadTouchHandler(GAMEPAD_STATE *gamepad_in);
-    ~GamepadTouchHandler() = default;
+    ~GamepadTouchHandler();
 
   private:
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
     void _handle_touch_hold(touchPosition touch) override;
+    void apply_host_buttons(touchPosition touch);
 
   private:
     GAMEPAD_STATE *gamepad_state;
@@ -236,6 +236,10 @@ class MagnifyTouchHandler : public TouchHandlerBase {
                         int image_height);
     ~MagnifyTouchHandler() = default;
 
+    bool captures_gamepad_input() const override { return true; }
+    void handle_navigation(u32 keys_down, const circlePosition &cpad,
+                           const circlePosition &cstick) override;
+
   private:
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
@@ -249,4 +253,7 @@ class MagnifyTouchHandler : public TouchHandlerBase {
     int image_height;
     int x_touch_offset = 0;
     int y_touch_offset = 0;
+    int previous_x = -1;
+    int previous_y = -1;
+    bool mouse_pressed = false;
 };

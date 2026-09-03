@@ -5,6 +5,7 @@
 #include "video/video_layout.hpp"
 #include "connection_status.hpp"
 #include "host_discovery_scan.hpp"
+#include "input/touch/select_menu_layout.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -129,25 +130,52 @@ int main() {
     assert(connection_termination_user_message(ML_ERROR_PROTECTED_CONTENT)
                .find("DRM") != std::string::npos);
 
-    std::vector<std::uint32_t> auto_nets;
-    moonlight_collect_scan_networks(0xC0A84464u, auto_nets, false);
-    assert(std::find(auto_nets.begin(), auto_nets.end(), 0xC0A84400u) !=
-           auto_nets.end());
-    assert(std::find(auto_nets.begin(), auto_nets.end(), 0xC0A84200u) !=
-           auto_nets.end());
-    assert(std::find(auto_nets.begin(), auto_nets.end(), 0xC0A84600u) !=
-           auto_nets.end());
-    assert(std::find(auto_nets.begin(), auto_nets.end(), 0x0A000000u) ==
-           auto_nets.end());
+    // Scan stays on the 3DS LAN /24 plus the preferred Moonlight subnet.
+    std::vector<std::uint32_t> local_nets;
+    moonlight_collect_scan_networks(0xC0A84464u, local_nets, true);
+    assert(local_nets.size() == 1);
+    assert(local_nets.front() == 0xC0A84400u);
 
-    std::vector<std::uint32_t> full_nets;
-    moonlight_collect_scan_networks(0x0A00000Au, full_nets, true);
-    assert(std::find(full_nets.begin(), full_nets.end(), 0x0A000000u) !=
-           full_nets.end());
-    assert(std::find(full_nets.begin(), full_nets.end(), 0xC0A80000u) !=
-           full_nets.end());
-    assert(std::find(full_nets.begin(), full_nets.end(), 0xC0A84400u) !=
-           full_nets.end());
+    std::vector<std::uint32_t> other_lan;
+    moonlight_collect_scan_networks(0xC0A8010Au, other_lan, true);
+    assert(other_lan.size() == 2);
+    assert(other_lan.front() == 0xC0A80100u);
+    assert(std::find(other_lan.begin(), other_lan.end(), 0xC0A84400u) !=
+           other_lan.end());
+    assert(std::find(other_lan.begin(), other_lan.end(), 0x0A000000u) ==
+           other_lan.end());
+    assert(std::find(other_lan.begin(), other_lan.end(), 0xC0A8FE00u) ==
+           other_lan.end());
+
+    std::vector<std::uint32_t> ten_net;
+    moonlight_collect_scan_networks(0x0A00000Au, ten_net, true);
+    assert(ten_net.size() == 2);
+    assert(ten_net.front() == 0x0A000000u);
+    assert(std::find(ten_net.begin(), ten_net.end(), 0xC0A84400u) !=
+           ten_net.end());
+    assert(kMoonlightPreferredHostIp == 0xC0A84432u);
+
+    int hit_row = -1;
+    int hit_col = -1;
+    assert(SelectMenuLayout::hit(40, 8, hit_row, hit_col) ==
+           SelectMenuLayout::Hit::None);
+    assert(SelectMenuLayout::hit(20, 36, hit_row, hit_col) ==
+           SelectMenuLayout::Hit::Tab0);
+    assert(SelectMenuLayout::hit(120, 36, hit_row, hit_col) ==
+           SelectMenuLayout::Hit::Tab1);
+    assert(SelectMenuLayout::hit(240, 36, hit_row, hit_col) ==
+           SelectMenuLayout::Hit::Tab2);
+    assert(SelectMenuLayout::hit(20, SelectMenuLayout::tile_y(1) + 4, hit_row,
+                                 hit_col) == SelectMenuLayout::Hit::Tile);
+    assert(hit_row == 1);
+    assert(hit_col == 0);
+    assert(SelectMenuLayout::hit(20, 230, hit_row, hit_col) ==
+           SelectMenuLayout::Hit::FooterBack);
+    assert(SelectMenuLayout::hit(160, 230, hit_row, hit_col) ==
+           SelectMenuLayout::Hit::FooterPage);
+    assert(SelectMenuLayout::hit(300, 230, hit_row, hit_col) ==
+           SelectMenuLayout::Hit::FooterOpen);
+    assert(SelectMenuLayout::tabs == 3);
 
     return 0;
 }

@@ -63,9 +63,15 @@ N3dsRendererBase::~N3dsRendererBase() {
     vramFree(vramFb);
     vramFree(vramTex);
 
-    u8 *framebuf = gfxGetFramebuffer(screen, GFX_LEFT, NULL, NULL);
-    memset(framebuf, 0, surface_width * surface_height * px_size);
-    gfxScreenSwapBuffers(screen, true);
+    // During QUIT the stream abort path restores the Citro2D shell next.
+    // Clearing LCDs here leaves a permanent black frame if shell draw is delayed.
+    if (n3ds_stream_render_active()) {
+        u8 *framebuf = gfxGetFramebuffer(screen, GFX_LEFT, NULL, NULL);
+        if (framebuf != nullptr) {
+            memset(framebuf, 0, surface_width * surface_height * px_size);
+            gfxScreenSwapBuffers(screen, true);
+        }
+    }
 
     if (surface_width == GSP_SCREEN_HEIGHT_TOP_2X) {
         gfxSetWide(false);
@@ -122,13 +128,23 @@ inline void N3dsRendererBase::draw_perf_counters() {
 }
 
 void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
-    if (!gspHasGpuRight()) {
+    // Abort immediately on QUIT so LiStopConnection never waits forever on a
+    // stuck gspWaitForEvent(P3D/PPF).
+    if (!n3ds_stream_render_active() || !gspHasGpuRight()) {
         return;
     }
 
     const u64 start_ticks = svcGetSystemTick();
 
-    const PresentationState presentation = global_presentation_state();
+    // Presentation Fit/Fill/Stretch/Magnify applies to the top screen only.
+    // Bottom video panes (dual stretch/mirror) always show their crop stretched.
+    PresentationState presentation = global_presentation_state();
+    if (screen != GFX_TOP) {
+        presentation.mode = PresentationMode::Stretch;
+        presentation.zoom = 1.0f;
+        presentation.pan_x = 0.0f;
+        presentation.pan_y = 0.0f;
+    }
     const bool presentation_changed =
         !command_list_valid ||
         !same_presentation_state(presentation, cached_presentation_state);
@@ -332,10 +348,22 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         command_list_valid = true;
     }
 
-    gspWaitForEvent(GSPGPU_EVENT_PPF, 0);
+    if (!n3ds_stream_render_active()) {
+        return;
+    }
+
+    // VBlank instead of infinite P3D/PPF waits — those hang on QUIT when the
+    // GPU event never arrives after LiInterruptConnection.
+    gspWaitForVBlank();
+    if (!n3ds_stream_render_active()) {
+        return;
+    }
 
     GX_ProcessCommandList(cmdlist, cached_cmdlist_len * 4, 2);
-    gspWaitForEvent(GSPGPU_EVENT_P3D, 0);
+    gspWaitForVBlank();
+    if (!n3ds_stream_render_active()) {
+        return;
+    }
 
     if ((screen == GFX_TOP) && gfxIs3D()) {
         u32 *dest_left =
@@ -371,7 +399,7 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
                                GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
                                GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
     }
-    gspWaitForEvent(GSPGPU_EVENT_PPF, 0);
+    gspWaitForVBlank();
 
     perf_fbcopy_ticks = svcGetSystemTick() - start_ticks;
     if (debug) {

@@ -42,6 +42,7 @@ int http_request(char *url, PHTTP_DATA data);
 void http_cleanup();
 void http_free_data(PHTTP_DATA data);
 void http_set_timeout_s(uint32_t connection_timeout_in);
+void http_set_fresh_connect(int enabled);
 void http_set_log_level(int log_level_in);
 void http_set_cancel_callback(http_cancel_callback_t callback, void *context);
 

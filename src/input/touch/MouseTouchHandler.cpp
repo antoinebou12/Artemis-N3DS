@@ -17,33 +17,89 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "../../system/dispatcher.hpp"
 #include "TouchHandler.hpp"
+#include "stream_bottom_ui.hpp"
 #include <Limelight.h>
 #include <cstring>
 
 #define N3DS_MOUSEPAD_SENSITIVITY 3
 
-MouseTouchHandler::MouseTouchHandler() {}
+namespace {
+constexpr int kPadTop = 30;
+constexpr int kPadBottom = 168;
+constexpr int kScrollX = 286;
+constexpr int kBtnY = 174;
+constexpr int kMenuY = 210;
+
+void paint_mouse(bool left, bool right, bool scrolling) {
+    using namespace StreamUi;
+    const BottomCanvas canvas = lock_bottom_canvas();
+    if (!canvas.ready()) {
+        return;
+    }
+    canvas.clear();
+    draw_header(canvas, "MOUSE", scrolling ? "SCROLL" : "MOVE");
+
+    canvas.round_fill(6, kPadTop, kScrollX - 12, kPadBottom - kPadTop,
+                      kColSurface);
+    canvas.text_centered("TRACKPAD", 6, 90, kScrollX - 12, kColMuted, 1);
+
+    canvas.round_fill(kScrollX, kPadTop, 28, kPadBottom - kPadTop, kColRaised);
+    canvas.text_centered("SCR", kScrollX, 90, 28, kColMuted, 1);
+
+    canvas.round_fill(6, kBtnY, 150, 28, left ? kColAccent : kColSurface);
+    canvas.text_centered("LEFT", 6, kBtnY + 10, 150,
+                         left ? kColDark : kColText, 1);
+    canvas.round_fill(164, kBtnY, 150, 28, right ? kColAccent : kColSurface);
+    canvas.text_centered("RIGHT", 164, kBtnY + 10, 150,
+                         right ? kColDark : kColText, 1);
+
+    canvas.round_fill(6, kMenuY, 308, 24, kColAccent);
+    canvas.text_centered("MENU", 6, kMenuY + 7, 308, kColDark, 1);
+    canvas.present();
+}
+
+void go_menu() {
+    MessageDispatcher::get_instance()->post(
+        std::make_shared<TouchStateChangedMsg>(N3dsTouchType::MENU_TOUCH));
+}
+} // namespace
+
+MouseTouchHandler::MouseTouchHandler() { paint_mouse(false, false, false); }
 
 void MouseTouchHandler::_handle_touch_down(touchPosition touch) {
-    if (touch.py < 175) {
+    if (touch.py >= kMenuY) {
+        go_menu();
+        return;
+    }
+
+    if (touch.py >= kBtnY && touch.py < kMenuY) {
+        if (touch.px > 160) {
+            mouse_button = BUTTON_RIGHT;
+            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
+            paint_mouse(false, true, false);
+        } else {
+            mouse_button = BUTTON_LEFT;
+            LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+            paint_mouse(true, false, false);
+        }
+        previous_x = -1;
+        previous_y = -1;
+        return;
+    }
+
+    if (touch.py >= kPadTop && touch.py < kPadBottom) {
         previous_x = touch.px;
         previous_y = touch.py;
-        if (touch.px > 285) {
-            v_scroll = true;
-        } else if (touch.py < 35) {
-            h_scroll = true;
-        }
-    } else if (touch.px > 160) {
-        mouse_button = BUTTON_RIGHT;
-        LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
-    } else {
-        mouse_button = BUTTON_LEFT;
-        LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
+        v_scroll = touch.px >= kScrollX;
+        h_scroll = false;
+        paint_mouse(false, false, v_scroll);
     }
 }
 
 void MouseTouchHandler::_handle_touch_up(touchPosition touch) {
+    (void)touch;
     if (mouse_button > -1) {
         LiSendMouseButtonEvent(BUTTON_ACTION_RELEASE, mouse_button);
     }
@@ -52,6 +108,7 @@ void MouseTouchHandler::_handle_touch_up(touchPosition touch) {
     previous_y = -1;
     v_scroll = false;
     h_scroll = false;
+    paint_mouse(false, false, false);
 }
 
 void MouseTouchHandler::_handle_touch_hold(touchPosition touch) {

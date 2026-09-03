@@ -38,31 +38,6 @@ void N3dsConnectionListener::connection_terminated(int errorCode) {
     last_termination_code = errorCode;
     last_termination_message = connection_termination_user_message(errorCode);
 
-    switch (errorCode) {
-    case ML_ERROR_GRACEFUL_TERMINATION:
-        printf("[stream] Connection ended gracefully\n");
-        break;
-    case ML_ERROR_NO_VIDEO_TRAFFIC:
-        printf("[stream] ERROR: No video traffic from host\n");
-        break;
-    case ML_ERROR_NO_VIDEO_FRAME:
-        printf("[stream] ERROR: Video frames stalled (network)\n");
-        break;
-    case ML_ERROR_UNEXPECTED_EARLY_TERMINATION:
-        printf("[stream] ERROR: Host ended stream early (capture)\n");
-        break;
-    case ML_ERROR_PROTECTED_CONTENT:
-        printf("[stream] ERROR: DRM-protected content on host\n");
-        break;
-    default:
-        printf("[stream] Connection terminated with error %d\n", errorCode);
-        break;
-    }
-
-    if (!last_termination_message.empty()) {
-        printf("[stream] User message: %s\n", last_termination_message.c_str());
-    }
-
     if (enable_motion) {
         HIDUSER_DisableAccelerometer();
         HIDUSER_DisableGyroscope();

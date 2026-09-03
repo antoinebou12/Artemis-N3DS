@@ -59,6 +59,8 @@ class VideoDecoderBase : public ISubscriber {
     int image_width, image_height, surface_width, surface_height, pixel_size;
     std::unique_ptr<IN3dsRenderer> renderer = nullptr;
     ThreadLock renderer_lock;
+    bool bottom_overlay_active = false;
+    N3dsTouchType active_touch_type = N3dsTouchType::DISABLED;
 };
 
 class MockVideoDecoder : public VideoDecoderBase {

@@ -4,6 +4,7 @@
 #include "../../stream_benchmark.hpp"
 #include "../../stream_telemetry_store.hpp"
 #include "../../system/dispatcher.hpp"
+#include "stream_bottom_ui.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -11,9 +12,7 @@
 
 PerformanceTouchHandler::PerformanceTouchHandler() { redraw(true); }
 
-PerformanceTouchHandler::~PerformanceTouchHandler() {
-    consoleSelect(&DebugTouchHandler::topScreen);
-}
+PerformanceTouchHandler::~PerformanceTouchHandler() = default;
 
 void PerformanceTouchHandler::redraw(bool force) {
     const u64 now = svcGetSystemTick();
@@ -23,34 +22,73 @@ void PerformanceTouchHandler::redraw(bool force) {
     }
     last_redraw_ticks = now;
 
+    using namespace StreamUi;
+    const BottomCanvas canvas = lock_bottom_canvas();
+    if (!canvas.ready()) {
+        return;
+    }
+
     const auto summary = global_stream_telemetry_summary();
     const auto &presentation = global_presentation_state();
+    canvas.clear();
 
-    // The top screen remains the uninterrupted live stream. Performance is a
-    // local bottom-screen dashboard only.
-    consoleSelect(&DebugTouchHandler::bottomScreen);
-    consoleClear();
-    std::printf("ARTEMIS 3DS  |  PERFORMANCE\n");
-    std::printf("TOP SCREEN: LIVE STREAM\n");
-    std::printf("----------------------------------------\n");
-    std::printf("Samples       %3zu / 120\n", summary.sample_count);
-    std::printf("Decode avg    %7.2f ms\n", summary.avg_decode_ms);
-    std::printf("Render avg    %7.2f ms\n", summary.avg_render_ms);
-    std::printf("Frame avg     %7.2f ms\n", summary.avg_frame_ms);
-    std::printf("Frame max     %7.2f ms\n", summary.max_frame_ms);
-    std::printf("Observed FPS  %7.1f\n", summary.avg_fps);
-    std::printf("Bitrate       %7u kbps\n", summary.bitrate_kbps);
-    std::printf("Dropped       %7u\n", summary.dropped_frames);
-    std::printf("Display       %s\n",
-                presentation_mode_name(presentation.mode));
-    std::printf("----------------------------------------\n");
+    char status[32];
+    std::snprintf(status, sizeof(status), "%s",
+                  presentation_mode_name(presentation.mode));
+    draw_header(canvas, "PERF", status);
+
+    char line[48];
+    const int card_h = 26;
+    int y = 32;
+
+    auto metric = [&](const char *label, const char *value) {
+        canvas.round_fill(6, y, 150, card_h, kColSurface);
+        canvas.text(label, 14, y + 4, kColMuted, 1);
+        canvas.text(value, 14, y + 14, kColText, 1);
+        y += card_h + 4;
+    };
+
+    auto metric_right = [&](const char *label, const char *value, int row) {
+        const int ry = 32 + row * (card_h + 4);
+        canvas.round_fill(164, ry, 150, card_h, kColSurface);
+        canvas.text(label, 172, ry + 4, kColMuted, 1);
+        canvas.text(value, 172, ry + 14, kColText, 1);
+    };
+
+    std::snprintf(line, sizeof(line), "%.2f ms", summary.avg_decode_ms);
+    metric("DECODE AVG", line);
+    std::snprintf(line, sizeof(line), "%.2f ms", summary.avg_render_ms);
+    metric("RENDER AVG", line);
+    std::snprintf(line, sizeof(line), "%.2f ms", summary.avg_frame_ms);
+    metric("FRAME AVG", line);
+    std::snprintf(line, sizeof(line), "%.1f", summary.avg_fps);
+    metric("FPS", line);
+
+    y = 32;
+    std::snprintf(line, sizeof(line), "%.2f ms", summary.max_frame_ms);
+    metric_right("FRAME MAX", line, 0);
+    std::snprintf(line, sizeof(line), "%lu kbps",
+                  static_cast<unsigned long>(summary.bitrate_kbps));
+    metric_right("BITRATE", line, 1);
+    std::snprintf(line, sizeof(line), "%lu",
+                  static_cast<unsigned long>(summary.dropped_frames));
+    metric_right("DROPPED", line, 2);
+    std::snprintf(line, sizeof(line), "%zu / 120", summary.sample_count);
+    metric_right("SAMPLES", line, 3);
+
+    canvas.round_fill(6, 168, 150, 28,
+                      kColAccent);
+    canvas.text_centered("SAVE CSV", 6, 176, 150, kColDark, 1);
+    canvas.round_fill(164, 168, 150, 28, kColRaised);
+    canvas.text_centered("MENU", 164, 176, 150, kColText, 1);
+
     if (status_text[0] != '\0') {
-        std::printf("%s\n", status_text);
+        canvas.text(status_text, 8, 202, kColMuted, 1);
     } else {
-        std::printf("A / left touch: save benchmark CSV\n");
+        canvas.text("A SAVE   B MENU", 8, 202, kColMuted, 1);
     }
-    std::printf("B / right touch: back to Quick Actions\n");
-    std::printf("Menu controls stay local to the 3DS.\n");
+
+    canvas.present();
 }
 
 void PerformanceTouchHandler::save_csv() {
@@ -85,11 +123,10 @@ void PerformanceTouchHandler::_handle_touch_down(touchPosition touch) {
 }
 
 void PerformanceTouchHandler::_handle_touch_up(touchPosition touch) {
-    if (touch.py < 170) {
+    if (touch.py < 168 || touch.py > 196) {
         redraw(true);
         return;
     }
-
     if (touch.px < 160) {
         save_csv();
     } else {

@@ -17,39 +17,89 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "../../system/dispatcher.hpp"
 #include "TouchHandler.hpp"
+#include "stream_bottom_ui.hpp"
 #include <Limelight.h>
-#include <cstring>
+
+namespace {
+constexpr int kMenuY = 208;
+constexpr int kPadBottom = 200;
+
+void paint_gamepad(bool l3, bool r3, bool guide) {
+    using namespace StreamUi;
+    const BottomCanvas canvas = lock_bottom_canvas();
+    if (!canvas.ready()) {
+        return;
+    }
+    canvas.clear();
+    draw_header(canvas, "GAMEPAD", "TOUCH HOST");
+
+    canvas.round_fill(6, 36, 150, 100, l3 ? kColAccent : kColSurface);
+    canvas.text_centered("L3", 6, 78, 150, l3 ? kColDark : kColText, 1);
+    canvas.round_fill(164, 36, 150, 100, r3 ? kColAccent : kColSurface);
+    canvas.text_centered("R3", 164, 78, 150, r3 ? kColDark : kColText, 1);
+
+    canvas.round_fill(6, 144, 308, 48, guide ? kColAccent : kColRaised);
+    canvas.text_centered("GUIDE / HOME", 6, 162, 308,
+                         guide ? kColDark : kColText, 1);
+
+    canvas.round_fill(6, kMenuY, 308, 26, kColAccent);
+    canvas.text_centered("MENU  SELECT", 6, kMenuY + 8, 308, kColDark, 1);
+    canvas.present();
+}
+
+void go_menu() {
+    MessageDispatcher::get_instance()->post(
+        std::make_shared<TouchStateChangedMsg>(N3dsTouchType::MENU_TOUCH));
+}
+} // namespace
 
 GamepadTouchHandler::GamepadTouchHandler(GAMEPAD_STATE *gamepad_in)
-    : gamepad_state(gamepad_in) {}
+    : gamepad_state(gamepad_in) {
+    paint_gamepad(false, false, false);
+}
 
-void GamepadTouchHandler::_handle_touch_down(touchPosition touch) {
-    if (touch.py >= 120) {
-        gamepad_state->buttons |= SPECIAL_FLAG;
+GamepadTouchHandler::~GamepadTouchHandler() = default;
+
+void GamepadTouchHandler::apply_host_buttons(touchPosition touch) {
+    gamepad_state->buttons &= ~(SPECIAL_FLAG | LS_CLK_FLAG | RS_CLK_FLAG);
+
+    if (touch.py >= kMenuY) {
+        go_menu();
+        paint_gamepad(false, false, false);
         return;
     }
 
-    if (touch.px < 235)
-        gamepad_state->buttons |= LS_CLK_FLAG;
-    if (touch.px > 104)
-        gamepad_state->buttons |= RS_CLK_FLAG;
+    bool l3 = false;
+    bool r3 = false;
+    bool guide = false;
+
+    if (touch.py >= 144 && touch.py < kPadBottom) {
+        gamepad_state->buttons |= SPECIAL_FLAG;
+        guide = true;
+    } else if (touch.py >= 36 && touch.py < 136) {
+        if (touch.px < 160) {
+            gamepad_state->buttons |= LS_CLK_FLAG;
+            l3 = true;
+        } else {
+            gamepad_state->buttons |= RS_CLK_FLAG;
+            r3 = true;
+        }
+    }
+    paint_gamepad(l3, r3, guide);
+}
+
+void GamepadTouchHandler::_handle_touch_down(touchPosition touch) {
+    apply_host_buttons(touch);
 }
 
 void GamepadTouchHandler::_handle_touch_up(touchPosition touch) {
+    (void)touch;
     gamepad_state->buttons &= ~(SPECIAL_FLAG | LS_CLK_FLAG | RS_CLK_FLAG);
+    paint_gamepad(false, false, false);
 }
 
 void GamepadTouchHandler::_handle_touch_hold(touchPosition touch) {
-    gamepad_state->buttons &= ~(SPECIAL_FLAG | LS_CLK_FLAG | RS_CLK_FLAG);
-
-    if (touch.py >= 120) {
-        gamepad_state->buttons |= SPECIAL_FLAG;
-        return;
-    }
-
-    if (touch.px < 235)
-        gamepad_state->buttons |= LS_CLK_FLAG;
-    if (touch.px > 104)
-        gamepad_state->buttons |= RS_CLK_FLAG;
+    apply_host_buttons(touch);
 }

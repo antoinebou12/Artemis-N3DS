@@ -33,7 +33,7 @@ include $(DEVKITARM)/3ds_rules
 #     - icon.png
 #     - <libctru folder>/default_icon.png
 #---------------------------------------------------------------------------------
-TARGET		:=	moonlight
+TARGET		:=	artemis
 BUILD		:=	build
 SOURCES		:=	src \
 				src/system/ \
@@ -62,9 +62,9 @@ GFXBUILD	:=	$(BUILD)
 
 
 # 3dsx
-APP_TITLE	:=	Moonlight
+APP_TITLE	:=	Artemis
 APP_DESCRIPTION	:=	Moonlight Streaming Client
-APP_AUTHOR	:=	zoeyjodon
+APP_AUTHOR	:=	antoinebou12
 ICON		:=	3ds/res/ic_moonlight.png
 
 # CIA
@@ -72,7 +72,7 @@ BANNER_AUDIO	:=	3ds/res/banner.wav
 BANNER_IMAGE	:=	3ds/res/banner.png
 RSF_PATH		:=	3ds/res/app.rsf
 UNIQUE_ID		:=	0x3600
-PRODUCT_CODE	:=	CTR-P-MOONLIGHT
+PRODUCT_CODE	:=	CTR-P-ARTEMIS
 ICON_FLAGS		:=	nosavebackups,visible
 
 # Version

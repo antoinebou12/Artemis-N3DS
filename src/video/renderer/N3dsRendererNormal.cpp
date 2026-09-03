@@ -19,6 +19,7 @@
 
 #include "N3dsRenderer.hpp"
 
+#include <memory>
 #include <cstdlib>
 #include <cstring>
 #include <stdbool.h>
@@ -27,16 +28,23 @@
 
 N3dsRendererNormal::N3dsRendererNormal(int dest_width, int dest_height,
                                        int src_width, int src_height,
-                                       int px_size, bool debug)
+                                       int px_size, bool debug,
+                                       bool allocate_bottom)
     : top_renderer(dest_width, dest_height, src_width, src_height, px_size,
-                   debug),
-      bottom_renderer(src_width, src_height, px_size) {}
+                   debug) {
+    if (allocate_bottom) {
+        bottom_renderer = std::make_unique<N3dsRendererBottom>(
+            src_width, src_height, px_size);
+    }
+}
 
 N3dsRendererNormal::~N3dsRendererNormal() = default;
 
 void N3dsRendererNormal::set_bottom_screen(const uint8_t *source, int offset,
                                            int size) {
-    bottom_renderer.write_px_to_framebuffer_raw(source, offset, size);
+    if (bottom_renderer != nullptr) {
+        bottom_renderer->write_px_to_framebuffer_raw(source, offset, size);
+    }
 }
 
 void N3dsRendererNormal::write_px_to_framebuffer(uint8_t *source) {

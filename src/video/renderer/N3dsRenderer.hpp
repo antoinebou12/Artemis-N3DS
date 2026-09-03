@@ -108,7 +108,8 @@ class N3dsRendererMock : public IN3dsRenderer {
 class N3dsRendererNormal : public IN3dsRenderer {
   public:
     N3dsRendererNormal(int dest_width, int dest_height, int src_width,
-                       int src_height, int px_size, bool debug = false);
+                       int src_height, int px_size, bool debug = false,
+                       bool allocate_bottom = true);
     ~N3dsRendererNormal();
     void write_px_to_framebuffer(uint8_t *source) override;
     void set_perf_decode_ticks(u64 ticks) override;
@@ -116,7 +117,7 @@ class N3dsRendererNormal : public IN3dsRenderer {
 
   private:
     N3dsRendererTop top_renderer;
-    N3dsRendererBottom bottom_renderer;
+    std::unique_ptr<N3dsRendererBottom> bottom_renderer;
 };
 
 class N3dsRendererDualScreenStretch : public IN3dsRenderer {

@@ -20,6 +20,11 @@ void n3ds_graphics_reset_after_stream();
 // Releases all graphics resources. Call before gfxExit().
 void n3ds_graphics_shutdown();
 
+// Stream GPU path: abort before LiStopConnection so workers never sit forever
+// in gspWaitForEvent(P3D/PPF). Re-enabled by n3ds_graphics_acquire_stream().
+void n3ds_stream_render_abort();
+bool n3ds_stream_render_active();
+
 bool n3ds_graphics_shell_active();
 C3D_RenderTarget *n3ds_graphics_top_target();
 C3D_RenderTarget *n3ds_graphics_bottom_target();

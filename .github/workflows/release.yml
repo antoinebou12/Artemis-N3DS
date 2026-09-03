@@ -49,9 +49,9 @@ jobs:
 
       - name: Verify release artifacts
         run: |
-          test -s antoinebou12.cia
-          test -s antoinebou12.3dsx
-          sha256sum antoinebou12.cia antoinebou12.3dsx > SHA256SUMS.txt
+          test -s artemis.cia
+          test -s artemis.3dsx
+          sha256sum artemis.cia artemis.3dsx > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
       - name: Publish GitHub release
@@ -65,8 +65,8 @@ jobs:
               --generate-notes
           fi
           gh release upload "$GITHUB_REF_NAME" \
-            antoinebou12.cia \
-            antoinebou12.3dsx \
+            artemis.cia \
+            artemis.3dsx \
             SHA256SUMS.txt \
             --clobber
 
@@ -77,6 +77,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           path: |
-            antoinebou12.cia
-            antoinebou12.3dsx
+            artemis.cia
+            artemis.3dsx
             SHA256SUMS.txt
