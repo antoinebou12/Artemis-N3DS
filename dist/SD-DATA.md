@@ -19,6 +19,7 @@ sd:/3ds/moonlight/
 | `paired` | Saved host list (`ip:port` per line) |
 | `host_profiles` | Per-host preset (`ip:port\|ProfileName`) |
 | `last_host` | Last selected host |
+| `applist/` | Cached host app lists (`address_port.txt`) for faster Apps screen |
 | `moonlight.conf` | Stream and UI settings |
 | `keys/client.pem`, `keys/key.pem`, `keys/client.p12` | Pairing certificates (sensitive) |
 | `keys/uniqueid.dat` | Client unique ID (sensitive) |

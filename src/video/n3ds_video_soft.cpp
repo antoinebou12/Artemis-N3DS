@@ -146,16 +146,35 @@ y2ru_failed:
 }
 
 int SoftVideoDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
+    if (decodeUnit == nullptr || decodeUnit->fullLength <= 0) {
+        return DR_OK;
+    }
+
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
 
     ensure_buf_size(&ffmpeg_buffer, &ffmpeg_buffer_size,
-                    decodeUnit->fullLength + AV_INPUT_BUFFER_PADDING_SIZE);
+                    static_cast<size_t>(decodeUnit->fullLength) +
+                        AV_INPUT_BUFFER_PADDING_SIZE);
+    if (ffmpeg_buffer == nullptr) {
+        return DR_OK;
+    }
 
-    while (entry != NULL) {
-        memcpy(ffmpeg_buffer + length, entry->data, entry->length);
+    const size_t capacity = ffmpeg_buffer_size;
+    while (entry != nullptr) {
+        if (entry->data == nullptr || entry->length <= 0) {
+            return DR_NEED_IDR;
+        }
+        const size_t piece = static_cast<size_t>(entry->length);
+        if (static_cast<size_t>(length) + piece > capacity) {
+            return DR_NEED_IDR;
+        }
+        memcpy(static_cast<u8 *>(ffmpeg_buffer) + length, entry->data, piece);
         length += entry->length;
         entry = entry->next;
+    }
+    if (length <= 0) {
+        return DR_OK;
     }
     ffmpeg_decode((unsigned char *)ffmpeg_buffer, length);
 

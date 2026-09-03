@@ -165,21 +165,39 @@ DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
 }
 
 int MvdDecoder::submit_decode_unit(PDECODE_UNIT decodeUnit) {
+    if (decodeUnit == nullptr || decodeUnit->fullLength <= 0) {
+        return DR_OK;
+    }
+
     const u64 decode_start_ticks = svcGetSystemTick();
     PLENTRY entry = decodeUnit->bufferList;
     int length = 0;
 
     if (ensure_linear_buf_size(&nal_unit_buffer, &nal_unit_buffer_size,
-                               decodeUnit->fullLength +
+                               static_cast<size_t>(decodeUnit->fullLength) +
                                    AV_INPUT_BUFFER_PADDING_SIZE)) {
         printf("Out of linear memory!\n");
         return DR_OK;
     }
+    if (nal_unit_buffer == nullptr) {
+        return DR_OK;
+    }
 
-    while (entry != NULL) {
-        memcpy(nal_unit_buffer + length, entry->data, entry->length);
+    const size_t capacity = nal_unit_buffer_size;
+    while (entry != nullptr) {
+        if (entry->data == nullptr || entry->length <= 0) {
+            return DR_NEED_IDR;
+        }
+        const size_t piece = static_cast<size_t>(entry->length);
+        if (static_cast<size_t>(length) + piece > capacity) {
+            return DR_NEED_IDR;
+        }
+        memcpy(static_cast<u8 *>(nal_unit_buffer) + length, entry->data, piece);
         length += entry->length;
         entry = entry->next;
+    }
+    if (length <= 0) {
+        return DR_OK;
     }
     GSPGPU_FlushDataCache(nal_unit_buffer, length);
 

@@ -115,6 +115,9 @@ std::string compact_action_label(const std::string &label) {
     if (label == "Settings") {
         return "Sets";
     }
+    if (label == "Search") {
+        return "Find";
+    }
     if (label == "Reload") {
         return "Sync";
     }

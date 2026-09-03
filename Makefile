@@ -63,7 +63,7 @@ GFXBUILD	:=	$(BUILD)
 
 # 3dsx
 APP_TITLE	:=	Artemis
-APP_DESCRIPTION	:=	Moonlight Streaming Client
+APP_DESCRIPTION	:=	Artemis GameStream Client
 APP_AUTHOR	:=	antoinebou12
 ICON		:=	3ds/res/ic_moonlight.png
 

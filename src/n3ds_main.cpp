@@ -15,6 +15,7 @@
  */
 
 #include "audio/audio.h"
+#include "app_list_cache.hpp"
 #include "config.hpp"
 #include "host_discovery.hpp"
 #include "input/n3ds_input.hpp"
@@ -40,6 +41,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <cctype>
 #include <malloc.h>
 #include <memory>
 #include <openssl/rand.h>
@@ -376,7 +378,9 @@ void free_app_list(PAPP_LIST list) {
 bool load_apps_once(PSERVER_DATA server, std::vector<RemoteApp> &apps,
                     std::string &error) {
     PAPP_LIST list = nullptr;
-    http_set_timeout_s(90);
+    // Prefer a shorter applist timeout so a dead host fails fast when cache
+    // already filled the UI.
+    http_set_timeout_s(45);
     const int result = gs_applist(server, &list);
     http_set_timeout_s(60);
     if (result != GS_OK) {
@@ -392,6 +396,7 @@ bool load_apps_once(PSERVER_DATA server, std::vector<RemoteApp> &apps,
         return false;
     }
 
+    apps.clear();
     for (PAPP_LIST entry = list; entry != nullptr; entry = entry->next) {
         if (entry->id <= 0 || entry->name == nullptr || entry->name[0] == '\0') {
             continue;
@@ -404,6 +409,24 @@ bool load_apps_once(PSERVER_DATA server, std::vector<RemoteApp> &apps,
         error = "The host returned no valid applications";
         return false;
     }
+
+    std::sort(apps.begin(), apps.end(),
+              [](const RemoteApp &a, const RemoteApp &b) {
+                  std::string la = a.name;
+                  std::string lb = b.name;
+                  for (char &ch : la) {
+                      ch = static_cast<char>(
+                          std::tolower(static_cast<unsigned char>(ch)));
+                  }
+                  for (char &ch : lb) {
+                      ch = static_cast<char>(
+                          std::tolower(static_cast<unsigned char>(ch)));
+                  }
+                  if (la != lb) {
+                      return la < lb;
+                  }
+                  return a.id < b.id;
+              });
     return true;
 }
 
@@ -1186,16 +1209,49 @@ bool stream_setup(PCONFIGURATION config, const SelectedHost &host,
 void app_browser(PCONFIGURATION config, PSERVER_DATA server,
                  const SelectedHost &host) {
     int selected = 0;
-    bool reload = true;
+    bool need_network = true;
+    bool have_apps = false;
     std::vector<RemoteApp> apps;
+    std::string filter;
+
+    {
+        std::vector<CachedRemoteApp> cached;
+        if (load_cached_app_list(host.address, host.port, cached)) {
+            apps.clear();
+            apps.reserve(cached.size());
+            for (const auto &entry : cached) {
+                apps.push_back({entry.id, entry.name});
+            }
+            have_apps = !apps.empty();
+            // Cached list opens immediately; X Sync forces a live refresh.
+            need_network = !have_apps;
+        }
+    }
 
     while (aptMainLoop()) {
-        if (reload) {
-            n3ds_ui_status("Applications", host.address,
-                           {"Loading host app list..."},
-                           "Retry once if the host is still waking up");
+        if (need_network) {
+            if (!have_apps) {
+                n3ds_ui_status("Applications", host.address,
+                               {"Loading host app list..."},
+                               "First load is cached for next time");
+            } else {
+                n3ds_ui_status("Applications", host.address,
+                               {"Refreshing app list..."},
+                               "Showing cached apps if refresh fails");
+            }
+
+            std::vector<RemoteApp> fresh;
             std::string error;
-            if (!load_apps_with_retry(config, server, apps, error)) {
+            if (load_apps_with_retry(config, server, fresh, error)) {
+                apps = std::move(fresh);
+                have_apps = true;
+                std::vector<CachedRemoteApp> to_save;
+                to_save.reserve(apps.size());
+                for (const auto &app : apps) {
+                    to_save.push_back({app.id, app.name});
+                }
+                save_cached_app_list(host.address, host.port, to_save);
+            } else if (!have_apps) {
                 show_message(
                     "Application List Failed",
                     error +
@@ -1204,38 +1260,61 @@ void app_browser(PCONFIGURATION config, PSERVER_DATA server,
                         "reachable on the LAN.");
                 return;
             }
-            reload = false;
+            need_network = false;
             selected = std::min(selected, std::max(0, (int)apps.size() - 1));
         }
 
+        std::vector<RemoteApp> visible;
         std::vector<std::string> items;
+        visible.reserve(apps.size());
+        items.reserve(apps.size());
         for (const auto &app : apps) {
+            if (!app_name_matches_filter(app.name, filter)) {
+                continue;
+            }
+            visible.push_back(app);
             items.push_back(app.name);
         }
 
+        if (selected >= (int)items.size()) {
+            selected = std::max(0, (int)items.size() - 1);
+        }
+
         std::string subtitle = host.address + "   " + current_profile_name(config);
-        const auto result =
-            show_menu("Applications", subtitle, items, selected, "Settings", true);
+        if (!filter.empty()) {
+            subtitle += "   find:" + filter;
+        } else {
+            subtitle += "   Y find";
+        }
+        if (items.empty()) {
+            items.push_back(filter.empty() ? "(no apps)" : "(no matches)");
+        }
+
+        const auto result = show_menu("Applications", subtitle, items, selected,
+                                      "Search", true, 0, "Sync");
         selected = result.index;
 
         if (result.action == UiMenuAction::Back) {
             return;
         }
         if (result.action == UiMenuAction::Refresh) {
-            reload = true;
+            need_network = true;
             continue;
         }
         if (result.action == UiMenuAction::Secondary) {
-            stream_settings(config, host);
+            filter = prompt_text("Filter apps", filter);
+            selected = 0;
             continue;
         }
         if (result.action == UiMenuAction::Select && result.index >= 0 &&
-            result.index < (int)apps.size()) {
-            const auto &app = apps[(size_t)result.index];
+            result.index < (int)visible.size() &&
+            visible[(size_t)result.index].id > 0) {
+            const auto &app = visible[(size_t)result.index];
             if (stream_setup(config, host, app)) {
                 start_stream(server, config, app);
             }
-            reload = true;
+            // Stay on the cached list for a fast return; press X Sync to update.
+            need_network = false;
         }
     }
 }

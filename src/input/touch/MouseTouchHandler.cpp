@@ -32,14 +32,31 @@ constexpr int kScrollX = 286;
 constexpr int kBtnY = 174;
 constexpr int kMenuY = 210;
 
-void paint_mouse(bool left, bool right, bool scrolling) {
+struct MousePaintState {
+    bool left = false;
+    bool right = false;
+    bool scrolling = false;
+};
+
+bool operator==(const MousePaintState &a, const MousePaintState &b) {
+    return a.left == b.left && a.right == b.right && a.scrolling == b.scrolling;
+}
+
+MousePaintState g_last_paint{};
+
+void paint_mouse(const MousePaintState &state, bool force) {
+    if (!force && state == g_last_paint) {
+        return;
+    }
+    g_last_paint = state;
+
     using namespace StreamUi;
     const BottomCanvas canvas = lock_bottom_canvas();
     if (!canvas.ready()) {
         return;
     }
     canvas.clear();
-    draw_header(canvas, "MOUSE", scrolling ? "SCROLL" : "MOVE");
+    draw_header(canvas, "MOUSE", state.scrolling ? "SCROLL" : "MOVE");
 
     canvas.round_fill(6, kPadTop, kScrollX - 12, kPadBottom - kPadTop,
                       kColSurface);
@@ -48,12 +65,13 @@ void paint_mouse(bool left, bool right, bool scrolling) {
     canvas.round_fill(kScrollX, kPadTop, 28, kPadBottom - kPadTop, kColRaised);
     canvas.text_centered("SCR", kScrollX, 90, 28, kColMuted, 1);
 
-    canvas.round_fill(6, kBtnY, 150, 28, left ? kColAccent : kColSurface);
+    canvas.round_fill(6, kBtnY, 150, 28, state.left ? kColAccent : kColSurface);
     canvas.text_centered("LEFT", 6, kBtnY + 10, 150,
-                         left ? kColDark : kColText, 1);
-    canvas.round_fill(164, kBtnY, 150, 28, right ? kColAccent : kColSurface);
+                         state.left ? kColDark : kColText, 1);
+    canvas.round_fill(164, kBtnY, 150, 28,
+                      state.right ? kColAccent : kColSurface);
     canvas.text_centered("RIGHT", 164, kBtnY + 10, 150,
-                         right ? kColDark : kColText, 1);
+                         state.right ? kColDark : kColText, 1);
 
     canvas.round_fill(6, kMenuY, 308, 24, kColAccent);
     canvas.text_centered("MENU", 6, kMenuY + 7, 308, kColDark, 1);
@@ -66,7 +84,10 @@ void go_menu() {
 }
 } // namespace
 
-MouseTouchHandler::MouseTouchHandler() { paint_mouse(false, false, false); }
+MouseTouchHandler::MouseTouchHandler() {
+    g_last_paint = {};
+    paint_mouse({}, true);
+}
 
 void MouseTouchHandler::_handle_touch_down(touchPosition touch) {
     if (touch.py >= kMenuY) {
@@ -78,11 +99,11 @@ void MouseTouchHandler::_handle_touch_down(touchPosition touch) {
         if (touch.px > 160) {
             mouse_button = BUTTON_RIGHT;
             LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_RIGHT);
-            paint_mouse(false, true, false);
+            paint_mouse({false, true, false}, false);
         } else {
             mouse_button = BUTTON_LEFT;
             LiSendMouseButtonEvent(BUTTON_ACTION_PRESS, BUTTON_LEFT);
-            paint_mouse(true, false, false);
+            paint_mouse({true, false, false}, false);
         }
         previous_x = -1;
         previous_y = -1;
@@ -94,7 +115,7 @@ void MouseTouchHandler::_handle_touch_down(touchPosition touch) {
         previous_y = touch.py;
         v_scroll = touch.px >= kScrollX;
         h_scroll = false;
-        paint_mouse(false, false, v_scroll);
+        paint_mouse({false, false, v_scroll}, false);
     }
 }
 
@@ -108,7 +129,7 @@ void MouseTouchHandler::_handle_touch_up(touchPosition touch) {
     previous_y = -1;
     v_scroll = false;
     h_scroll = false;
-    paint_mouse(false, false, false);
+    paint_mouse({}, false);
 }
 
 void MouseTouchHandler::_handle_touch_hold(touchPosition touch) {

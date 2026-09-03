@@ -26,7 +26,24 @@ namespace {
 constexpr int kMenuY = 208;
 constexpr int kPadBottom = 200;
 
-void paint_gamepad(bool l3, bool r3, bool guide) {
+struct GamepadPaintState {
+    bool l3 = false;
+    bool r3 = false;
+    bool guide = false;
+};
+
+bool operator==(const GamepadPaintState &a, const GamepadPaintState &b) {
+    return a.l3 == b.l3 && a.r3 == b.r3 && a.guide == b.guide;
+}
+
+GamepadPaintState g_last_paint{};
+
+void paint_gamepad(const GamepadPaintState &state, bool force) {
+    if (!force && state == g_last_paint) {
+        return;
+    }
+    g_last_paint = state;
+
     using namespace StreamUi;
     const BottomCanvas canvas = lock_bottom_canvas();
     if (!canvas.ready()) {
@@ -35,14 +52,14 @@ void paint_gamepad(bool l3, bool r3, bool guide) {
     canvas.clear();
     draw_header(canvas, "GAMEPAD", "TOUCH HOST");
 
-    canvas.round_fill(6, 36, 150, 100, l3 ? kColAccent : kColSurface);
-    canvas.text_centered("L3", 6, 78, 150, l3 ? kColDark : kColText, 1);
-    canvas.round_fill(164, 36, 150, 100, r3 ? kColAccent : kColSurface);
-    canvas.text_centered("R3", 164, 78, 150, r3 ? kColDark : kColText, 1);
+    canvas.round_fill(6, 36, 150, 100, state.l3 ? kColAccent : kColSurface);
+    canvas.text_centered("L3", 6, 78, 150, state.l3 ? kColDark : kColText, 1);
+    canvas.round_fill(164, 36, 150, 100, state.r3 ? kColAccent : kColSurface);
+    canvas.text_centered("R3", 164, 78, 150, state.r3 ? kColDark : kColText, 1);
 
-    canvas.round_fill(6, 144, 308, 48, guide ? kColAccent : kColRaised);
+    canvas.round_fill(6, 144, 308, 48, state.guide ? kColAccent : kColRaised);
     canvas.text_centered("GUIDE / HOME", 6, 162, 308,
-                         guide ? kColDark : kColText, 1);
+                         state.guide ? kColDark : kColText, 1);
 
     canvas.round_fill(6, kMenuY, 308, 26, kColAccent);
     canvas.text_centered("MENU  SELECT", 6, kMenuY + 8, 308, kColDark, 1);
@@ -57,37 +74,38 @@ void go_menu() {
 
 GamepadTouchHandler::GamepadTouchHandler(GAMEPAD_STATE *gamepad_in)
     : gamepad_state(gamepad_in) {
-    paint_gamepad(false, false, false);
+    g_last_paint = {};
+    paint_gamepad({}, true);
 }
 
 GamepadTouchHandler::~GamepadTouchHandler() = default;
 
 void GamepadTouchHandler::apply_host_buttons(touchPosition touch) {
+    if (gamepad_state == nullptr) {
+        return;
+    }
+
     gamepad_state->buttons &= ~(SPECIAL_FLAG | LS_CLK_FLAG | RS_CLK_FLAG);
 
     if (touch.py >= kMenuY) {
         go_menu();
-        paint_gamepad(false, false, false);
         return;
     }
 
-    bool l3 = false;
-    bool r3 = false;
-    bool guide = false;
-
+    GamepadPaintState state{};
     if (touch.py >= 144 && touch.py < kPadBottom) {
         gamepad_state->buttons |= SPECIAL_FLAG;
-        guide = true;
+        state.guide = true;
     } else if (touch.py >= 36 && touch.py < 136) {
         if (touch.px < 160) {
             gamepad_state->buttons |= LS_CLK_FLAG;
-            l3 = true;
+            state.l3 = true;
         } else {
             gamepad_state->buttons |= RS_CLK_FLAG;
-            r3 = true;
+            state.r3 = true;
         }
     }
-    paint_gamepad(l3, r3, guide);
+    paint_gamepad(state, false);
 }
 
 void GamepadTouchHandler::_handle_touch_down(touchPosition touch) {
@@ -96,8 +114,10 @@ void GamepadTouchHandler::_handle_touch_down(touchPosition touch) {
 
 void GamepadTouchHandler::_handle_touch_up(touchPosition touch) {
     (void)touch;
-    gamepad_state->buttons &= ~(SPECIAL_FLAG | LS_CLK_FLAG | RS_CLK_FLAG);
-    paint_gamepad(false, false, false);
+    if (gamepad_state != nullptr) {
+        gamepad_state->buttons &= ~(SPECIAL_FLAG | LS_CLK_FLAG | RS_CLK_FLAG);
+    }
+    paint_gamepad({}, false);
 }
 
 void GamepadTouchHandler::_handle_touch_hold(touchPosition touch) {

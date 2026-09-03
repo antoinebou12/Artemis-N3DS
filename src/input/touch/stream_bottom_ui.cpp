@@ -1,5 +1,7 @@
 #include "stream_bottom_ui.hpp"
 
+#include "../../graphics_lifecycle.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
@@ -178,14 +180,33 @@ void BottomCanvas::text_centered(const char *value, int x, int y, int w,
 }
 
 void BottomCanvas::present() const {
-    gfxFlushBuffers();
-    gfxScreenSwapBuffers(GFX_BOTTOM, false);
+    if (!ready() || !n3ds_stream_render_active()) {
+        return;
+    }
+    // Never call gfxFlushBuffers() / gfxScreenSwapBuffers() here.
+    // The top-screen GPU path uses GX_DisplayTransfer + swap; a full flush
+    // from the helper UI races that transfer and leaves a permanent black
+    // stream after Gamepad/Mouse/SELECT transitions.
+    const u32 bytes =
+        static_cast<u32>(kScreenW) * static_cast<u32>(kScreenH) *
+        static_cast<u32>(px_size);
+    GSPGPU_FlushDataCache(fb, bytes);
 }
 
 BottomCanvas lock_bottom_canvas() {
     BottomCanvas canvas;
+    if (!n3ds_stream_render_active()) {
+        return canvas;
+    }
+
+    // Do not call gfxSetScreenFormat during stream — it reallocates LCD
+    // buffers and breaks top-screen video until the next full reconnect.
     canvas.fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
     canvas.px_size = gspGetBytesPerPixel(gfxGetScreenFormat(GFX_BOTTOM));
+    if (canvas.fb == nullptr || canvas.px_size < 2) {
+        canvas.fb = nullptr;
+        canvas.px_size = 2;
+    }
     return canvas;
 }
 

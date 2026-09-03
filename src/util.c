@@ -69,17 +69,30 @@ bool ensure_buf_size(void **buf, size_t *buf_size, size_t required_size) {
 }
 
 int ensure_linear_buf_size(void **buf, size_t *buf_size, size_t required_size) {
-    if (*buf_size >= required_size)
-        return 0;
-
-    if (buf != NULL)
-        linearFree(*buf);
-
-    *buf_size = required_size;
-    *buf = linearAlloc(*buf_size);
-    if (!*buf) {
-        fprintf(stderr, "Failed to allocate %zu bytes\n", *buf_size);
+    if (buf == NULL || buf_size == NULL) {
         return 1;
     }
+
+    // Require a live pointer — a prior linearAlloc failure used to leave
+    // (*buf == NULL) with a non-zero *buf_size, so the next frame skipped
+    // realloc and memcpy'd to NULL (Luma "Translation - Section", FAR~0x2).
+    if (*buf != NULL && *buf_size >= required_size) {
+        return 0;
+    }
+
+    if (*buf != NULL) {
+        linearFree(*buf);
+        *buf = NULL;
+    }
+    *buf_size = 0;
+
+    void *grown = linearAlloc(required_size);
+    if (grown == NULL) {
+        fprintf(stderr, "Failed to allocate %zu bytes\n", required_size);
+        return 1;
+    }
+
+    *buf = grown;
+    *buf_size = required_size;
     return 0;
 }

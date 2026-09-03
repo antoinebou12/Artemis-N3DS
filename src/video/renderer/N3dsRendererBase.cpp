@@ -69,7 +69,7 @@ N3dsRendererBase::~N3dsRendererBase() {
         u8 *framebuf = gfxGetFramebuffer(screen, GFX_LEFT, NULL, NULL);
         if (framebuf != nullptr) {
             memset(framebuf, 0, surface_width * surface_height * px_size);
-            gfxScreenSwapBuffers(screen, true);
+            gfxScreenSwapBuffers(screen, false);
         }
     }
 
@@ -406,5 +406,8 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         draw_perf_counters();
     }
 
-    gfxScreenSwapBuffers(screen, true);
+    // Swap only this screen. Passing true also swaps the bottom LCD and
+    // fights the software helper UI (SELECT/Gamepad/Mouse), blacking video
+    // after mode transitions.
+    gfxScreenSwapBuffers(screen, false);
 }

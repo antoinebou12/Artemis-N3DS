@@ -59,6 +59,11 @@ void N3dsTouchscreenInput::_n3dsinput_set_touch(N3dsTouchType touch_type_in) {
         return;
     }
 
+    // Drop the previous helper before constructing the next so paints never
+    // overlap during Gamepad/Mouse/Keyboard switches.
+    handler.reset();
+    touch_type = touch_type_in;
+
     switch (touch_type_in) {
     case N3dsTouchType::GAMEPAD:
         handler = std::make_unique<GamepadTouchHandler>(gamepad_state);
@@ -92,7 +97,6 @@ void N3dsTouchscreenInput::_n3dsinput_set_touch(N3dsTouchType touch_type_in) {
         handler = nullptr;
         break;
     }
-    touch_type = touch_type_in;
 }
 
 void N3dsTouchscreenInput::n3dsinput_handle_touch(u32 kDown, u32 kUp) {

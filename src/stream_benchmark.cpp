@@ -46,10 +46,12 @@ bool export_stream_benchmark_csv(char *output_path, std::size_t output_size) {
     for (std::size_t i = 0; i < sample_count; ++i) {
         const auto &sample = samples[i];
         elapsed_ms += sample.frame_ms;
-        std::fprintf(fd, "%zu,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u\n", i,
-                     elapsed_ms, sample.decode_ms, sample.render_ms,
-                     sample.frame_ms, sample.fps, sample.bitrate_kbps,
-                     sample.dropped_frames);
+        // Prefer %u over %zu — 3DS newlib has crashed on size_t formats.
+        std::fprintf(fd, "%u,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u\n",
+                     static_cast<unsigned>(i), elapsed_ms, sample.decode_ms,
+                     sample.render_ms, sample.frame_ms, sample.fps,
+                     static_cast<unsigned>(sample.bitrate_kbps),
+                     static_cast<unsigned>(sample.dropped_frames));
     }
 
     std::fclose(fd);

@@ -216,9 +216,21 @@ void paint_select_menu(int page, int selected_row, int selected_col,
     canvas.clear();
 
     char status[40];
-    std::snprintf(status, sizeof(status), "%s %.1fx %3.0ff",
-                  presentation_mode_name(presentation.mode), presentation.zoom,
-                  summary.avg_fps);
+    {
+        float zoom = presentation.zoom;
+        float fps = summary.avg_fps;
+        if (!std::isfinite(zoom) || zoom < 1.0f) {
+            zoom = 1.0f;
+        }
+        if (!std::isfinite(fps) || fps < 0.0f) {
+            fps = 0.0f;
+        }
+        const unsigned zoom_x10 = static_cast<unsigned>(zoom * 10.0f + 0.5f);
+        const unsigned fps_i = static_cast<unsigned>(fps + 0.5f);
+        std::snprintf(status, sizeof(status), "%s %u.%ux %uf",
+                      presentation_mode_name(presentation.mode), zoom_x10 / 10u,
+                      zoom_x10 % 10u, fps_i);
+    }
     draw_header(canvas, "SELECT", status);
 
     for (int tab = 0; tab < SelectMenuLayout::tabs; ++tab) {
@@ -253,17 +265,27 @@ void paint_select_menu(int page, int selected_row, int selected_col,
 
     if (page == 2) {
         char chip[48];
-        std::snprintf(chip, sizeof(chip), "BR %luk DROP %lu",
-                      static_cast<unsigned long>(summary.bitrate_kbps),
-                      static_cast<unsigned long>(summary.dropped_frames));
+        std::snprintf(chip, sizeof(chip), "BR %uK DROP %u",
+                      static_cast<unsigned>(summary.bitrate_kbps),
+                      static_cast<unsigned>(summary.dropped_frames));
         canvas.round_fill(6, SelectMenuLayout::tile_y(2), 308,
                           SelectMenuLayout::tile_height(), kColRaised);
         canvas.text_centered(chip, 6,
                              SelectMenuLayout::tile_y(2) +
                                  (SelectMenuLayout::tile_height() - 7) / 2,
                              308, kColText, 1);
-        std::snprintf(chip, sizeof(chip), "DEC %.1f REN %.1f",
-                      summary.avg_decode_ms, summary.avg_render_ms);
+        float dec = summary.avg_decode_ms;
+        float ren = summary.avg_render_ms;
+        if (!std::isfinite(dec) || dec < 0.0f) {
+            dec = 0.0f;
+        }
+        if (!std::isfinite(ren) || ren < 0.0f) {
+            ren = 0.0f;
+        }
+        const unsigned dec_x10 = static_cast<unsigned>(dec * 10.0f + 0.5f);
+        const unsigned ren_x10 = static_cast<unsigned>(ren * 10.0f + 0.5f);
+        std::snprintf(chip, sizeof(chip), "DEC %u.%u REN %u.%u", dec_x10 / 10u,
+                      dec_x10 % 10u, ren_x10 / 10u, ren_x10 % 10u);
         canvas.round_fill(6, SelectMenuLayout::tile_y(3), 308,
                           SelectMenuLayout::tile_height(), kColSurface);
         canvas.text_centered(chip, 6,
@@ -287,7 +309,10 @@ MenuTouchHandler::MenuTouchHandler() {
     paint_page();
 }
 
-MenuTouchHandler::~MenuTouchHandler() { aptSetHomeAllowed(false); }
+MenuTouchHandler::~MenuTouchHandler() {
+    // Keep HOME allowed while other stream helpers are active; the stream
+    // exit path restores the shell and HOME policy.
+}
 
 void MenuTouchHandler::paint_page() {
     paint_select_menu(page, selected_row, selected_col, active_row, active_col);
