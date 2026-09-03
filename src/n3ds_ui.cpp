@@ -636,11 +636,18 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                           const std::vector<std::string> &items,
                           int selected_index,
                           const std::string &secondary_label,
-                          bool allow_refresh) {
+                          bool allow_refresh,
+                          u64 auto_refresh_ms) {
     UiMenuResult result{};
     if (!n3ds_graphics_shell_active()) {
         return result;
     }
+
+    const u64 auto_refresh_ticks =
+        auto_refresh_ms > 0
+            ? static_cast<u64>(SYSCLOCK_ARM11) * auto_refresh_ms / 1000
+            : 0;
+    u64 last_auto_refresh = svcGetSystemTick();
 
     int selected = items.empty()
                        ? -1
@@ -651,6 +658,15 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
     bool dirty = true;
 
     while (aptMainLoop()) {
+        if (auto_refresh_ticks > 0) {
+            const u64 now = svcGetSystemTick();
+            if (now - last_auto_refresh >= auto_refresh_ticks) {
+                result.action = UiMenuAction::AutoRefresh;
+                result.index = selected;
+                return result;
+            }
+        }
+
         if (dirty) {
             draw_menu_frame(title, subtitle, items, selected, secondary_label,
                             allow_refresh);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <3ds/types.h>
+
 #include <string>
 #include <vector>
 
@@ -7,6 +9,7 @@ enum class UiMenuAction {
     Select,
     Back,
     Refresh,
+    AutoRefresh,
     Secondary,
 };
 
@@ -29,7 +32,8 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                           const std::vector<std::string> &items,
                           int selected_index,
                           const std::string &secondary_label = "",
-                          bool allow_refresh = false);
+                          bool allow_refresh = false,
+                          u64 auto_refresh_ms = 0);
 
 // Scrollable details/error surface. The top screen owns the diagnostic text;
 // the bottom screen owns touch/joystick scrolling and Back/Save/Retry actions.

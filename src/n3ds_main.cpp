@@ -137,10 +137,11 @@ void select_last_host_index(const std::vector<DiscoveredHost> &hosts,
 UiMenuResult show_menu(const std::string &title, const std::string &subtitle,
                        const std::vector<std::string> &items, int selected = 0,
                        const std::string &secondary = "",
-                       bool allow_refresh = false) {
+                       bool allow_refresh = false,
+                       u64 auto_refresh_ms = 0) {
     if (n3ds_ui_active()) {
         return n3ds_ui_menu(title, subtitle, items, selected, secondary,
-                            allow_refresh);
+                            allow_refresh, auto_refresh_ms);
     }
 
     int index = items.empty() ? -1 : std::clamp(selected, 0,
@@ -267,9 +268,24 @@ void apply_host_profile(PCONFIGURATION config, const SelectedHost &host,
 SelectedHost select_host(PCONFIGURATION config) {
     int selected = 0;
     std::vector<DiscoveredHost> hosts;
+    bool network_error_shown = false;
+    constexpr u64 kAutoScanMs = 8000;
 
-    auto refresh = [&]() {
-        if (n3ds_ui_active()) {
+    auto refresh = [&](bool show_scan_status) {
+        const NetworkStatus network = moonlight_network_status();
+        if (network != NetworkStatus::Ready) {
+            if (!network_error_shown || show_scan_status) {
+                show_message("No Network",
+                             moonlight_network_status_message(network));
+                network_error_shown = true;
+            }
+            hosts = discover_moonlight_hosts();
+            selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
+            return;
+        }
+
+        network_error_shown = false;
+        if (show_scan_status && n3ds_ui_active()) {
             n3ds_ui_status("Hosts", "Scanning LAN...",
                            {"Port 47989", "Including saved hosts"},
                            "~1 second");
@@ -278,7 +294,7 @@ SelectedHost select_host(PCONFIGURATION config) {
         selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
     };
 
-    refresh();
+    refresh(true);
     select_last_host_index(hosts, selected);
 
     while (aptMainLoop()) {
@@ -298,14 +314,19 @@ SelectedHost select_host(PCONFIGURATION config) {
             hosts[(size_t)selected].saved;
         const auto result = show_menu(
             "Hosts", "Saved & LAN hosts", items, selected,
-            can_remove ? "Remove" : "Add Host", true);
+            can_remove ? "Remove" : "Add Host", true, kAutoScanMs);
         selected = result.index;
 
         if (result.action == UiMenuAction::Back) {
             return {};
         }
         if (result.action == UiMenuAction::Refresh) {
-            refresh();
+            refresh(true);
+            select_last_host_index(hosts, selected);
+            continue;
+        }
+        if (result.action == UiMenuAction::AutoRefresh) {
+            refresh(false);
             select_last_host_index(hosts, selected);
             continue;
         }
@@ -317,7 +338,7 @@ SelectedHost select_host(PCONFIGURATION config) {
                                        " from this 3DS?\nPairing keys stay "
                                        "until you unpair on the PC.")) {
                     remove_pair_address(host.address, host.port);
-                    refresh();
+                    refresh(true);
                     select_last_host_index(hosts, selected);
                 }
                 continue;
@@ -1141,6 +1162,12 @@ void pair_host(PCONFIGURATION config, PSERVER_DATA server,
 
 bool connect_host(PCONFIGURATION config, PSERVER_DATA server,
                   const SelectedHost &host) {
+    const NetworkStatus network = moonlight_network_status();
+    if (network != NetworkStatus::Ready) {
+        show_message("No Network", moonlight_network_status_message(network));
+        return false;
+    }
+
     n3ds_ui_status("Connecting", host.address, {"Opening session..."},
                    "Please wait");
 

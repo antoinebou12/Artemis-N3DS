@@ -3,6 +3,7 @@
 #include "system/pair_record.hpp"
 
 #include <3ds.h>
+#include <3ds/services/ac.h>
 
 #include <algorithm>
 #include <arpa/inet.h>
@@ -191,7 +192,48 @@ std::uint32_t ipv4_sort_key(const std::string &address) {
     }
     return ntohl(parsed.s_addr);
 }
+
+bool wifi_connected() {
+    u32 status = 0;
+    if (R_FAILED(ACU_GetStatus(&status))) {
+        return false;
+    }
+    return status == 3;
+}
 } // namespace
+
+NetworkStatus moonlight_network_status() {
+    if (!wifi_connected()) {
+        return NetworkStatus::NoWifi;
+    }
+
+    in_addr local_addr{};
+    in_addr netmask_addr{};
+    in_addr broadcast_addr{};
+    if (SOCU_GetIPInfo(&local_addr, &netmask_addr, &broadcast_addr) != 0) {
+        return NetworkStatus::NoLanIp;
+    }
+
+    if (local_addr.s_addr == 0 || broadcast_addr.s_addr == 0) {
+        return NetworkStatus::NoLanIp;
+    }
+
+    return NetworkStatus::Ready;
+}
+
+const char *moonlight_network_status_message(NetworkStatus status) {
+    switch (status) {
+    case NetworkStatus::NoWifi:
+        return "No Wi-Fi connection.\n\nConnect in System Settings, then "
+               "return and press Refresh.";
+    case NetworkStatus::NoLanIp:
+        return "Wi-Fi is on but this 3DS has no LAN address.\n\nCheck your "
+               "router or hotspot, then press Refresh.";
+    case NetworkStatus::Ready:
+        return "";
+    }
+    return "";
+}
 
 std::vector<DiscoveredHost> discover_moonlight_hosts() {
     std::vector<DiscoveredHost> hosts;
@@ -204,6 +246,10 @@ std::vector<DiscoveredHost> discover_moonlight_hosts() {
         if (parse_saved_address(entry, address, port)) {
             append_if_new(hosts, seen, address, port, true);
         }
+    }
+
+    if (moonlight_network_status() != NetworkStatus::Ready) {
+        return hosts;
     }
 
     in_addr local_addr{};
