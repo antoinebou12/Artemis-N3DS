@@ -26,6 +26,7 @@ test-host:
 	@mkdir -p $(HOST_TEST_DIR)
 	$(HOST_CXX) -std=c++17 -Wall -Wextra -Werror \
 		-Isrc \
+		-Ithird_party/moonlight-common-c/src \
 		tests/foundation_smoke.cpp \
 		src/presentation_state.cpp \
 		src/stream_profile_catalog.cpp \

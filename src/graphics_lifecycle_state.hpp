@@ -35,6 +35,14 @@ class GraphicsLifecycleState {
         return true;
     }
 
+    bool finish_stream() {
+        if (mode_ != GraphicsMode::Stream) {
+            return false;
+        }
+        mode_ = GraphicsMode::Dormant;
+        return true;
+    }
+
     GraphicsMode mode() const { return mode_; }
     bool shell_active() const { return mode_ == GraphicsMode::Shell; }
 

@@ -25,36 +25,42 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string>
 
 std::shared_ptr<N3dsConnectionListener> N3dsConnectionListener::instance =
     nullptr;
 
 void N3dsConnectionListener::connection_terminated(int errorCode) {
+    if (connection_closed.load()) {
+        return;
+    }
+
+    last_termination_code = errorCode;
+    last_termination_message = connection_termination_user_message(errorCode);
+
     switch (errorCode) {
     case ML_ERROR_GRACEFUL_TERMINATION:
-        printf("Connection has been terminated gracefully.\n");
+        printf("[stream] Connection ended gracefully\n");
         break;
     case ML_ERROR_NO_VIDEO_TRAFFIC:
-        printf("No video received from host. Check the host PC's firewall and "
-               "port forwarding rules.\n");
+        printf("[stream] ERROR: No video traffic from host\n");
         break;
     case ML_ERROR_NO_VIDEO_FRAME:
-        printf("Your network connection isn't performing well. Reduce your "
-               "video bitrate setting or try a faster connection.\n");
+        printf("[stream] ERROR: Video frames stalled (network)\n");
         break;
     case ML_ERROR_UNEXPECTED_EARLY_TERMINATION:
-        printf("The connection was unexpectedly terminated by the host due to "
-               "a video capture error. Make sure no DRM-protected content is "
-               "playing on the host.\n");
+        printf("[stream] ERROR: Host ended stream early (capture)\n");
         break;
     case ML_ERROR_PROTECTED_CONTENT:
-        printf("The connection was terminated by the host due to DRM-protected "
-               "content. Close any DRM-protected content on the host and try "
-               "again.\n");
+        printf("[stream] ERROR: DRM-protected content on host\n");
         break;
     default:
-        printf("Connection terminated with error: %d\n", errorCode);
+        printf("[stream] Connection terminated with error %d\n", errorCode);
         break;
+    }
+
+    if (!last_termination_message.empty()) {
+        printf("[stream] User message: %s\n", last_termination_message.c_str());
     }
 
     if (enable_motion) {
@@ -149,7 +155,11 @@ void N3dsConnectionListener::accept(IMessage *msg) {
 
 bool N3dsConnectionListener::is_connection_closed() {
     return connection_closed.load();
-};
+}
+
+std::string N3dsConnectionListener::termination_user_message() const {
+    return last_termination_message;
+}
 
 static void local_connection_terminated(int errorCode) {
     auto instance = N3dsConnectionListener::get_instance();

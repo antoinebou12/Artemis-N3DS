@@ -13,6 +13,10 @@ bool n3ds_graphics_acquire_shell();
 // stream renderer. It is safe to call repeatedly.
 void n3ds_graphics_acquire_stream();
 
+// Tear down stream GPU state and clear both screens before re-entering the
+// Citro2D shell. Call after LiStopConnection() and before n3ds_ui_init().
+void n3ds_graphics_reset_after_stream();
+
 // Releases all graphics resources. Call before gfxExit().
 void n3ds_graphics_shutdown();
 

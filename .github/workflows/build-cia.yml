@@ -34,9 +34,11 @@ jobs:
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror \
             -Isrc \
+            -Ithird_party/moonlight-common-c/src \
             tests/foundation_smoke.cpp \
             src/presentation_state.cpp \
             src/stream_telemetry.cpp \
+            src/stream_profile_catalog.cpp \
             -o /tmp/moonlight-n3ds-foundation-tests
 
       - name: Run host smoke tests
@@ -69,9 +71,9 @@ jobs:
 
       - name: Verify release artifacts
         run: |
-          test -s moonlight.cia
-          test -s moonlight.3dsx
-          ls -lh moonlight.cia moonlight.3dsx
+          test -s antoinebou12.cia
+          test -s antoinebou12.3dsx
+          ls -lh antoinebou12.cia antoinebou12.3dsx
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -80,5 +82,5 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            moonlight.cia
-            moonlight.3dsx
+            antoinebou12.cia
+            antoinebou12.3dsx

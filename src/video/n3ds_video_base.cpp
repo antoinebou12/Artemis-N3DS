@@ -19,6 +19,7 @@
 
 #include "../system/dispatcher.hpp"
 #include "../graphics_lifecycle.hpp"
+#include "../input/touch/TouchHandler.hpp"
 #include "gamepad_bgr.h"
 #include "keyboard_bgr.h"
 #include "touchpad_bgr.h"
@@ -49,6 +50,8 @@ VideoDecoderBase::VideoDecoderBase(int width, int height) {
 }
 
 VideoDecoderBase::~VideoDecoderBase() {
+    printf("[stream] Releasing video decoder surfaces\n");
+    renderer.reset();
     auto pDispatcher = MessageDispatcher::get_instance();
     pDispatcher->unsubscribe(MessageType::TOUCH_STATE_CHANGED, this);
     pDispatcher->unsubscribe(MessageType::KEYBOARD_STATE_CHANGED, this);
@@ -68,7 +71,7 @@ void VideoDecoderBase::accept(IMessage *msg) {
         break;
     case MessageType::EXIT_STREAM: {
         _accept_touch_state_changed(N3dsTouchType::DISABLED);
-        printf("Exiting stream...\n");
+        printf("[stream] Video overlay disabled for teardown\n");
     } break;
     default:
         break;
@@ -89,6 +92,8 @@ void VideoDecoderBase::_accept_touch_state_changed(N3dsTouchType ttype) {
             pixel_size);
         (static_cast<N3dsRendererNormal *>(renderer.get()))
             ->set_bottom_screen(gamepad_bgr);
+        consoleSelect(&DebugTouchHandler::bottomScreen);
+        printf("\x1b[29;1HHOME/SELECT: menu  L3/R3/X = host");
         break;
     case (N3dsTouchType::MOUSEPAD):
         renderer = std::make_unique<N3dsRendererNormal>(

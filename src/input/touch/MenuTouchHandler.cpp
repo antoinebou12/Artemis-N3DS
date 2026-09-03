@@ -12,7 +12,11 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "../../presentation_state.hpp"
 #include "../../system/dispatcher.hpp"
 #include "TouchHandler.hpp"
 #include <Limelight.h>
@@ -25,23 +29,57 @@ namespace {
 constexpr int kButtonHeight = 60;
 constexpr int kButtonWidth = 160;
 constexpr int kNavThreshold = 45;
+constexpr int kPageSwipeThreshold = 48;
 constexpr u64 kInitialRepeat =
     static_cast<u64>(SYSCLOCK_ARM11) * 300 / 1000;
 constexpr u64 kRepeat = static_cast<u64>(SYSCLOCK_ARM11) * 120 / 1000;
 
-const char *kButtonLabels[4][2] = {
-    {"GAMEPAD", "MOUSEPAD"},
-    {"KEYBOARD", "ABS TOUCH"},
-    {"DS STRETCH", "MAGNIFY"},
-    {"PERFORMANCE", "QUIT"},
+enum class MenuTileKind {
+    TouchMode,
+    Exit,
+    Performance,
+    Presentation,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
 };
 
-N3dsTouchType kButtonTypes[4][2] = {
-    {N3dsTouchType::GAMEPAD, N3dsTouchType::MOUSEPAD},
-    {N3dsTouchType::KEYBOARD, N3dsTouchType::ABSOLUTE_TOUCH},
-    {N3dsTouchType::DS_TOUCH, N3dsTouchType::MAGNIFY_TOUCH},
-    {N3dsTouchType::PERFORMANCE_TOUCH, N3dsTouchType::DISABLED},
+struct MenuTile {
+    const char *label;
+    MenuTileKind kind;
+    N3dsTouchType touch_type = N3dsTouchType::DISABLED;
+    PresentationMode presentation = PresentationMode::Fit;
 };
+
+const MenuTile kInputPage[4][2] = {
+    {{"GAMEPAD", MenuTileKind::TouchMode, N3dsTouchType::GAMEPAD},
+     {"MOUSE", MenuTileKind::TouchMode, N3dsTouchType::MOUSEPAD}},
+    {{"KEYBOARD", MenuTileKind::TouchMode, N3dsTouchType::KEYBOARD},
+     {"ABS TOUCH", MenuTileKind::TouchMode, N3dsTouchType::ABSOLUTE_TOUCH}},
+    {{"DS STRETCH", MenuTileKind::TouchMode, N3dsTouchType::DS_TOUCH},
+     {"MAGNIFY", MenuTileKind::TouchMode, N3dsTouchType::MAGNIFY_TOUCH}},
+    {{"PERF", MenuTileKind::Performance},
+     {"QUIT", MenuTileKind::Exit}},
+};
+
+const MenuTile kDisplayPage[4][2] = {
+    {{"FIT", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+      PresentationMode::Fit},
+     {"FILL", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+      PresentationMode::Fill}},
+    {{"STRETCH", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+      PresentationMode::Stretch},
+     {"SBS", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+      PresentationMode::StereoSideBySide}},
+    {{"ZOOM+", MenuTileKind::ZoomIn},
+     {"ZOOM-", MenuTileKind::ZoomOut}},
+    {{"RESET", MenuTileKind::ZoomReset},
+     {"QUIT", MenuTileKind::Exit}},
+};
+
+const MenuTile &tile_at(int page, int row, int col) {
+    return page == 0 ? kInputPage[row][col] : kDisplayPage[row][col];
+}
 
 void print_tile(const char *label, bool selected, bool pressed) {
     if (pressed) {
@@ -66,6 +104,60 @@ int axis_dir(int value) {
     }
     return 0;
 }
+
+void apply_presentation_mode(PresentationMode mode) {
+    PresentationState state = global_presentation_state();
+    state.mode = mode;
+    if (mode == PresentationMode::Magnify) {
+        state.zoom = std::max(state.zoom, 2.0f);
+    } else {
+        state.zoom = 1.0f;
+        state.pan_x = 0.0f;
+        state.pan_y = 0.0f;
+    }
+    set_global_presentation_state(state);
+}
+
+void adjust_stream_zoom(float delta) {
+    PresentationState state = global_presentation_state();
+    state.mode = PresentationMode::Magnify;
+    state.zoom = std::clamp(state.zoom + delta, 1.0f, 4.0f);
+    set_global_presentation_state(state);
+}
+
+void reset_stream_zoom() {
+    PresentationState state = global_presentation_state();
+    state.mode = PresentationMode::Magnify;
+    state.zoom = 2.0f;
+    state.pan_x = 0.0f;
+    state.pan_y = 0.0f;
+    set_global_presentation_state(state);
+}
+
+std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile) {
+    switch (tile.kind) {
+    case MenuTileKind::Exit:
+        return std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM);
+    case MenuTileKind::Performance:
+        return std::make_shared<TouchStateChangedMsg>(
+            N3dsTouchType::PERFORMANCE_TOUCH);
+    case MenuTileKind::TouchMode:
+        return std::make_shared<TouchStateChangedMsg>(tile.touch_type);
+    case MenuTileKind::Presentation:
+        apply_presentation_mode(tile.presentation);
+        return nullptr;
+    case MenuTileKind::ZoomIn:
+        adjust_stream_zoom(0.25f);
+        return nullptr;
+    case MenuTileKind::ZoomOut:
+        adjust_stream_zoom(-0.25f);
+        return nullptr;
+    case MenuTileKind::ZoomReset:
+        reset_stream_zoom();
+        return nullptr;
+    }
+    return nullptr;
+}
 } // namespace
 
 MenuTouchHandler::MenuTouchHandler() {
@@ -86,28 +178,30 @@ void MenuTouchHandler::redraw(bool force) {
     }
     last_redraw_ticks = now;
 
-    // The top screen remains 100% dedicated to the remote video. The bottom
-    // screen is a local control surface and captures navigation while open.
     consoleSelect(&DebugTouchHandler::bottomScreen);
     consoleClear();
-    std::printf("ARTEMIS 3DS  |  QUICK ACTIONS\n");
-    std::printf("TOP: video\n");
-    std::printf("BOTTOM: menu\n");
-    std::printf("----------------------------------------\n");
+    std::printf("HOME/SELECT: menu  L/R: page %d/2 %s\n", page + 1,
+                page == 0 ? "INPUT" : "DISPLAY");
+    std::printf("L3/R3 on pad = host sticks  A:ok B:pad\n");
 
     for (int row = 0; row < 4; ++row) {
         const bool left_pressed = active_row == row && active_col == 0;
         const bool right_pressed = active_row == row && active_col == 1;
+        const MenuTile &left = tile_at(page, row, 0);
+        const MenuTile &right = tile_at(page, row, 1);
         std::printf("\n");
-        print_tile(kButtonLabels[row][0],
-                   selected_row == row && selected_col == 0, left_pressed);
-        print_tile(kButtonLabels[row][1],
-                   selected_row == row && selected_col == 1, right_pressed);
+        print_tile(left.label, selected_row == row && selected_col == 0,
+                   left_pressed);
+        print_tile(right.label, selected_row == row && selected_col == 1,
+                   right_pressed);
         std::printf("\n");
     }
 
-    std::printf("\nHOME: menu B: gamepad A: select\n");
-    std::printf("Local menu input is not sent to the PC.\n");
+    if (page == 1) {
+        std::printf("\nMode: %s  Zoom: %.1fx\n",
+                    presentation_mode_name(global_presentation_state().mode),
+                    global_presentation_state().zoom);
+    }
 }
 
 void MenuTouchHandler::move_selection(int dx, int dy) {
@@ -121,15 +215,13 @@ void MenuTouchHandler::move_selection(int dx, int dy) {
 }
 
 void MenuTouchHandler::activate_selected() {
-    const N3dsTouchType touch_type = kButtonTypes[selected_row][selected_col];
-    std::shared_ptr<IMessage> next_message;
-    if (touch_type == N3dsTouchType::DISABLED) {
-        next_message =
-            std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM);
+    const MenuTile &tile = tile_at(page, selected_row, selected_col);
+    if (std::shared_ptr<IMessage> next_message = message_for_tile(tile);
+        next_message != nullptr) {
+        MessageDispatcher::get_instance()->post(next_message);
     } else {
-        next_message = std::make_shared<TouchStateChangedMsg>(touch_type);
+        redraw(true);
     }
-    MessageDispatcher::get_instance()->post(next_message);
 }
 
 void MenuTouchHandler::handle_navigation(u32 keys_down,
@@ -144,6 +236,20 @@ void MenuTouchHandler::handle_navigation(u32 keys_down,
         MessageDispatcher::get_instance()->post(
             std::make_shared<TouchStateChangedMsg>(
                 N3dsTouchType::PERFORMANCE_TOUCH));
+        return;
+    }
+    if (keys_down & KEY_L) {
+        page = (page + 1) % 2;
+        selected_row = 0;
+        selected_col = 0;
+        redraw(true);
+        return;
+    }
+    if (keys_down & KEY_R) {
+        page = (page + 1) % 2;
+        selected_row = 0;
+        selected_col = 0;
+        redraw(true);
         return;
     }
     if (keys_down & KEY_A) {
@@ -173,8 +279,6 @@ void MenuTouchHandler::handle_navigation(u32 keys_down,
     int nav_x = axis_dir(raw_x);
     int nav_y = axis_dir(raw_y);
 
-    // Prefer the dominant axis so diagonal analog movement never skips across
-    // two grid dimensions at once.
     if (nav_x != 0 && nav_y != 0) {
         if (std::abs(raw_x) >= std::abs(raw_y)) {
             nav_y = 0;
@@ -223,15 +327,19 @@ void MenuTouchHandler::update_touch_target(touchPosition touch) {
     active_col = col;
     selected_row = row;
     selected_col = col;
-    const N3dsTouchType touch_type = kButtonTypes[row][col];
-    if (touch_type == N3dsTouchType::DISABLED) {
-        message = std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM);
-    } else {
-        message = std::make_shared<TouchStateChangedMsg>(touch_type);
-    }
+    message = message_for_tile(tile_at(page, row, col));
+}
+
+void MenuTouchHandler::change_page(int delta) {
+    page = (page + delta + 2) % 2;
+    selected_row = 0;
+    selected_col = 0;
+    redraw(true);
 }
 
 void MenuTouchHandler::_handle_touch_down(touchPosition touch) {
+    touch_start_x = touch.px;
+    touch_page_swipe = false;
     update_touch_target(touch);
     redraw(true);
 }
@@ -239,10 +347,15 @@ void MenuTouchHandler::_handle_touch_down(touchPosition touch) {
 void MenuTouchHandler::_handle_touch_up(touchPosition touch) {
     const int pressed_row = active_row;
     const int pressed_col = active_col;
-    update_touch_target(touch);
-    if (message != nullptr && active_row == pressed_row &&
-        active_col == pressed_col) {
-        MessageDispatcher::get_instance()->post(message);
+    const int swipe_dx = touch.px - touch_start_x;
+    if (touch_page_swipe || std::abs(swipe_dx) >= kPageSwipeThreshold) {
+        change_page(swipe_dx < 0 ? 1 : -1);
+    } else {
+        update_touch_target(touch);
+        if (message != nullptr && active_row == pressed_row &&
+            active_col == pressed_col) {
+            MessageDispatcher::get_instance()->post(message);
+        }
     }
     message = nullptr;
     active_row = -1;
@@ -253,6 +366,15 @@ void MenuTouchHandler::_handle_touch_up(touchPosition touch) {
 void MenuTouchHandler::_handle_touch_hold(touchPosition touch) {
     const int old_row = active_row;
     const int old_col = active_col;
+    const int swipe_dx = touch.px - touch_start_x;
+    if (std::abs(swipe_dx) >= kPageSwipeThreshold) {
+        touch_page_swipe = true;
+        active_row = -1;
+        active_col = -1;
+        message = nullptr;
+        redraw(false);
+        return;
+    }
     update_touch_target(touch);
     redraw(old_row != active_row || old_col != active_col);
 }

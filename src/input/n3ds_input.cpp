@@ -110,7 +110,6 @@ int N3dsInput::_n3ds_to_li_buttons(u32 key_n3ds) {
     int li_out = 0;
     li_out |= n3ds_to_li_button(key_n3ds, CUSTOM_KEY_A, A_FLAG);
     li_out |= n3ds_to_li_button(key_n3ds, CUSTOM_KEY_B, B_FLAG);
-    li_out |= n3ds_to_li_button(key_n3ds, KEY_SELECT, BACK_FLAG);
     li_out |= n3ds_to_li_button(key_n3ds, KEY_START, PLAY_FLAG);
     li_out |= n3ds_to_li_button(key_n3ds, KEY_DRIGHT, RIGHT_FLAG);
     li_out |= n3ds_to_li_button(key_n3ds, KEY_DLEFT, LEFT_FLAG);
@@ -181,13 +180,16 @@ void N3dsInput::n3dsinput_handle_event() {
 
     touch_handler->n3dsinput_handle_touch(kDown, kUp);
 
-    // HOME opens the local Quick Actions surface. It never needs to be sent to
-    // the remote host.
+    // HOME and SELECT open the local Quick Actions surface. Neither should be
+    // forwarded to the remote host while opening the menu.
     if (aptCheckHomePressRejected()) {
         if (!menu_active) {
-            force_touchscreen_menu();
+            touch_handler->open_menu();
             menu_active = true;
         }
+    } else if ((kDown & KEY_SELECT) && !touch_handler->captures_gamepad_input()) {
+        touch_handler->open_menu();
+        menu_active = true;
     } else {
         menu_active = false;
     }
@@ -228,12 +230,12 @@ void N3dsInput::n3dsinput_handle_event() {
     }
 
     if (kDown & ~KEY_TOUCH) {
-        gamepad_state.buttons |= _n3ds_to_li_buttons(kDown);
+        gamepad_state.buttons |= _n3ds_to_li_buttons(kDown & ~KEY_SELECT);
         gamepad_state.leftTrigger |= n3ds_to_li_trigger(kDown, CUSTOM_KEY_ZL);
         gamepad_state.rightTrigger |= n3ds_to_li_trigger(kDown, CUSTOM_KEY_ZR);
     }
     if (kUp & ~KEY_TOUCH) {
-        gamepad_state.buttons &= ~_n3ds_to_li_buttons(kUp);
+        gamepad_state.buttons &= ~_n3ds_to_li_buttons(kUp & ~KEY_SELECT);
         gamepad_state.leftTrigger &= ~n3ds_to_li_trigger(kUp, CUSTOM_KEY_ZL);
         gamepad_state.rightTrigger &= ~n3ds_to_li_trigger(kUp, CUSTOM_KEY_ZR);
     }

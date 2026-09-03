@@ -280,7 +280,7 @@ SelectedHost select_host(PCONFIGURATION config) {
                              moonlight_network_status_message(network));
                 network_error_shown = true;
             }
-            hosts = discover_moonlight_hosts();
+            hosts = discover_moonlight_hosts(false);
             selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
             return;
         }
@@ -288,10 +288,10 @@ SelectedHost select_host(PCONFIGURATION config) {
         network_error_shown = false;
         if (show_scan_status && n3ds_ui_active()) {
             n3ds_ui_status("Hosts", "Scanning LAN...",
-                           {"Port 47989", "Including saved hosts"},
-                           "~1 second");
+                           {"10.x / 172.16 / 192.168", "Including saved hosts"},
+                           "Please wait");
         }
-        hosts = discover_moonlight_hosts();
+        hosts = discover_moonlight_hosts(show_scan_status);
         selected = std::min(selected, std::max(0, (int)hosts.size() - 1));
     };
 
@@ -842,19 +842,67 @@ void stream_settings(PCONFIGURATION config, const SelectedHost &host) {
 void show_host_info(PCONFIGURATION config, PSERVER_DATA server,
                     const SelectedHost &host) {
     std::string message;
-    message += "Address: " + host.address + ":" + std::to_string(host.port) + "\n";
+    message += "Address: " + host.address + ":" + std::to_string(host.port) +
+               "\n";
+    if (server->httpPort > 0) {
+        message += "HTTP port: " + std::to_string(server->httpPort) + "\n";
+    }
+    if (server->httpsPort > 0) {
+        message += "HTTPS port: " + std::to_string(server->httpsPort) + "\n";
+    }
     message += "Pairing: ";
     message += server->paired ? "Paired\n" : "Not paired\n";
     message += "Profile: " + current_profile_name(config) + "\n";
     message += "GPU: ";
     message += server->gpuType != nullptr ? server->gpuType : "Unknown";
-    message += "\nGameStream: ";
+    message += "\n";
+    message += "GFE major: " + std::to_string(server->serverMajorVersion) + "\n";
+    message += "GameStream: ";
     message += server->gsVersion != nullptr ? server->gsVersion : "Unknown";
-    message += "\nHost app: ";
+    message += "\n";
+    message += "Host app: ";
     message += server->serverInfo.serverInfoAppVersion != nullptr
                    ? server->serverInfo.serverInfoAppVersion
                    : "Unknown";
-    show_message("Host Details", message);
+    message += "\n";
+    if (server->serverInfo.serverInfoGfeVersion != nullptr) {
+        message += "GFE version: ";
+        message += server->serverInfo.serverInfoGfeVersion;
+        message += "\n";
+    }
+
+    const int codecs = server->serverInfo.serverCodecModeSupport;
+    message += "Codecs: ";
+    bool first_codec = true;
+    auto append_codec = [&](const char *name, int flag) {
+        if ((codecs & flag) == 0) {
+            return;
+        }
+        if (!first_codec) {
+            message += ", ";
+        }
+        message += name;
+        first_codec = false;
+    };
+    append_codec("H.264", SCM_H264);
+    append_codec("HEVC", SCM_HEVC);
+    append_codec("HEVC 10", SCM_HEVC_MAIN10);
+    append_codec("AV1", SCM_AV1_MAIN8);
+    append_codec("AV1 10", SCM_AV1_MAIN10);
+    append_codec("H.264 444", SCM_H264_HIGH8_444);
+    if (first_codec) {
+        message += "Unknown";
+    }
+    message += "\n";
+
+    if (server->currentGame != 0) {
+        message += "Current game id: " + std::to_string(server->currentGame) +
+                   "\n";
+    }
+    message += "NVIDIA host: ";
+    message += server->isNvidiaSoftware ? "Yes\n" : "No\n";
+
+    n3ds_ui_details("Host Details", message, host.address);
 }
 
 struct InputLoopContext {
@@ -882,9 +930,33 @@ static inline void input_loop(void *context_in) {
     }
 }
 
+// Ensure worker threads always observe connection_closed before we join them.
+// aptMainLoop() can become false while EXIT_STREAM is still queued, which
+// previously left input/dispatch threads blocked forever.
+static inline void request_stream_shutdown(
+    N3dsConnectionListener *connection_listener, int error_code) {
+    if (connection_listener == nullptr ||
+        connection_listener->is_connection_closed()) {
+        return;
+    }
+
+    printf("[stream] Requesting shutdown (code %d)\n", error_code);
+    LiInterruptConnection();
+
+    auto dispatcher = MessageDispatcher::get_instance();
+    dispatcher->post(
+        std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM));
+    dispatcher->dispatch_all();
+
+    if (!connection_listener->is_connection_closed()) {
+        connection_listener->connection_terminated(error_code);
+    }
+}
+
 static inline void stream_loop(PCONFIGURATION config,
                                N3dsConnectionListener *connection_listener,
                                std::shared_ptr<N3dsInput> input_handler) {
+    (void)config;
     size_t stack_size = 0x20000;
     s32 priority = 0x30;
     svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
@@ -893,7 +965,7 @@ static inline void stream_loop(PCONFIGURATION config,
     Thread dispatch_thread = nullptr;
     InputLoopContext input_context{input_handler};
 
-    if (!config->viewonly && input_handler != nullptr) {
+    if (input_handler != nullptr) {
         input_thread =
             threadCreate(input_loop, &input_context, stack_size, priority, -1,
                          false);
@@ -901,19 +973,32 @@ static inline void stream_loop(PCONFIGURATION config,
     dispatch_thread =
         threadCreate(dispatch_loop, nullptr, stack_size, priority, -1, false);
 
-    while (!connection_listener->is_connection_closed() && aptMainLoop()) {
-        gspWaitForAnyEvent();
-        if (aptShouldClose()) {
-            MessageDispatcher::get_instance()->post(
-                std::make_shared<GenericEventMsg>(MessageType::EXIT_STREAM));
+    while (!connection_listener->is_connection_closed()) {
+        if (!aptMainLoop() || aptShouldClose()) {
+            printf("[stream] System close requested during stream\n");
+            request_stream_shutdown(connection_listener,
+                                    ML_ERROR_GRACEFUL_TERMINATION);
+            break;
         }
+        gspWaitForAnyEvent();
     }
 
+    if (!connection_listener->is_connection_closed()) {
+        printf("[stream] Forcing shutdown before worker join\n");
+        request_stream_shutdown(connection_listener,
+                                ML_ERROR_GRACEFUL_TERMINATION);
+    }
+
+    MessageDispatcher::get_instance()->dispatch_all();
+
+    printf("[stream] Joining input/dispatch workers\n");
     if (input_thread != nullptr) {
         threadJoin(input_thread, U64_MAX);
+        threadFree(input_thread);
     }
     if (dispatch_thread != nullptr) {
         threadJoin(dispatch_thread, U64_MAX);
+        threadFree(dispatch_thread);
     }
 }
 
@@ -1000,6 +1085,7 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
     if (status != 0) {
         n3ds_connection_callbacks.connectionTerminated(status);
         N3dsConnectionListener::destroy_instance();
+        n3ds_graphics_reset_after_stream();
         n3ds_ui_init();
         show_message("Connection Failed",
                      "Moonlight connection error " + std::to_string(status));
@@ -1008,14 +1094,42 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
 
     stream_loop(config, connection_listener, input_handler);
 
+    const std::string stream_end_message =
+        connection_listener->termination_user_message();
+
+    printf("[stream] Releasing local input handler\n");
+    input_handler.reset();
+
+    printf("[stream] Interrupting Moonlight connection\n");
     LiInterruptConnection();
+    printf("[stream] Stopping Moonlight connection\n");
     LiStopConnection();
+    printf("[stream] Moonlight connection stopped\n");
+
     N3dsConnectionListener::destroy_instance();
-    gspWaitForP3D();
-    gspWaitForPPF();
+
+    consoleSelect(&DebugTouchHandler::topScreen);
+    consoleClear();
+    consoleSelect(&DebugTouchHandler::bottomScreen);
+    consoleClear();
+
+    n3ds_graphics_reset_after_stream();
     if (!n3ds_ui_init()) {
-        show_message("UI Restore Failed",
-                     "Could not restore the Artemis shell after streaming.");
+        printf("[stream] ERROR: Citro2D shell restore failed\n");
+        gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
+        gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
+        gfxSetDoubleBuffering(GFX_TOP, false);
+        gfxSetDoubleBuffering(GFX_BOTTOM, false);
+        fallback_wait_for_button(
+            "Stream ended but the Artemis UI could not be restored.\n"
+            "Press A or B to return to menus.");
+    } else {
+        printf("[stream] Shell UI restored successfully\n");
+        n3ds_ui_status("Artemis 3DS", "Returned from stream", {},
+                       "Restoring menus...");
+        if (!stream_end_message.empty()) {
+            show_message("Stream Ended", stream_end_message);
+        }
     }
     persist_runtime_config(config);
 

@@ -3,10 +3,15 @@
 #include "stream_profile.hpp"
 #include "stream_telemetry.hpp"
 #include "video/video_layout.hpp"
+#include "connection_status.hpp"
+#include "host_discovery_scan.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
+#include <string>
+#include <vector>
 
 static bool nearly_equal(float a, float b, float epsilon = 0.001f) {
     return std::fabs(a - b) <= epsilon;
@@ -114,6 +119,35 @@ int main() {
 
     telemetry.reset();
     assert(telemetry.size() == 0);
+
+    assert(connection_termination_user_message(ML_ERROR_GRACEFUL_TERMINATION)
+               .empty());
+    assert(connection_termination_user_message(ML_ERROR_NO_VIDEO_TRAFFIC)
+               .find("No video") != std::string::npos);
+    assert(connection_termination_user_message(ML_ERROR_NO_VIDEO_FRAME)
+               .find("bitrate") != std::string::npos);
+    assert(connection_termination_user_message(ML_ERROR_PROTECTED_CONTENT)
+               .find("DRM") != std::string::npos);
+
+    std::vector<std::uint32_t> auto_nets;
+    moonlight_collect_scan_networks(0xC0A84464u, auto_nets, false);
+    assert(std::find(auto_nets.begin(), auto_nets.end(), 0xC0A84400u) !=
+           auto_nets.end());
+    assert(std::find(auto_nets.begin(), auto_nets.end(), 0xC0A84200u) !=
+           auto_nets.end());
+    assert(std::find(auto_nets.begin(), auto_nets.end(), 0xC0A84600u) !=
+           auto_nets.end());
+    assert(std::find(auto_nets.begin(), auto_nets.end(), 0x0A000000u) ==
+           auto_nets.end());
+
+    std::vector<std::uint32_t> full_nets;
+    moonlight_collect_scan_networks(0x0A00000Au, full_nets, true);
+    assert(std::find(full_nets.begin(), full_nets.end(), 0x0A000000u) !=
+           full_nets.end());
+    assert(std::find(full_nets.begin(), full_nets.end(), 0xC0A80000u) !=
+           full_nets.end());
+    assert(std::find(full_nets.begin(), full_nets.end(), 0xC0A84400u) !=
+           full_nets.end());
 
     return 0;
 }

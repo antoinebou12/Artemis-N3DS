@@ -19,10 +19,12 @@
 
 #pragma once
 
+#include "../connection_status.hpp"
 #include "../system/AtomicVar.hpp"
 #include "../system/subscriber.hpp"
 #include <Limelight.h>
 #include <memory>
+#include <string>
 
 class N3dsConnectionListener : public ISubscriber {
   public:
@@ -63,12 +65,15 @@ class N3dsConnectionListener : public ISubscriber {
                                 unsigned short reportRateHz);
 
     bool is_connection_closed();
+    std::string termination_user_message() const;
 
   private:
     static std::shared_ptr<N3dsConnectionListener> instance;
     bool enable_motion;
     AtomicVar<bool> debug = false;
     AtomicVar<bool> connection_closed = false;
+    int last_termination_code = ML_ERROR_GRACEFUL_TERMINATION;
+    std::string last_termination_message;
 };
 
 extern CONNECTION_LISTENER_CALLBACKS n3ds_connection_callbacks;

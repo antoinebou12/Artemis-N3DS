@@ -1,4 +1,5 @@
 #include "host_discovery.hpp"
+#include "host_discovery_scan.hpp"
 
 #include "system/pair_record.hpp"
 
@@ -93,6 +94,29 @@ void configure_probe_socket(int fd) {
                sizeof(kDiscoverySocketBuffer));
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &kDiscoverySocketBuffer,
                sizeof(kDiscoverySocketBuffer));
+}
+
+void scan_batch(std::uint32_t first_ip, std::uint32_t last_ip,
+                std::uint32_t local_ip, std::vector<DiscoveredHost> &hosts,
+                std::set<std::string> &seen);
+
+void scan_slash24(std::uint32_t network, std::uint32_t local_ip,
+                  std::vector<DiscoveredHost> &hosts,
+                  std::set<std::string> &seen) {
+    const std::uint32_t first_host = network + 1;
+    const std::uint32_t last_host = network + 254;
+    for (std::uint32_t batch_start = first_host; batch_start <= last_host;) {
+        if (!aptMainLoop()) {
+            return;
+        }
+        const std::uint32_t batch_end =
+            std::min(last_host, batch_start + kBatchSize - 1);
+        scan_batch(batch_start, batch_end, local_ip, hosts, seen);
+        if (batch_end == UINT32_MAX) {
+            break;
+        }
+        batch_start = batch_end + 1;
+    }
 }
 
 void scan_batch(std::uint32_t first_ip, std::uint32_t last_ip,
@@ -235,7 +259,7 @@ const char *moonlight_network_status_message(NetworkStatus status) {
     return "";
 }
 
-std::vector<DiscoveredHost> discover_moonlight_hosts() {
+std::vector<DiscoveredHost> discover_moonlight_hosts(bool scan_common_subnets) {
     std::vector<DiscoveredHost> hosts;
     std::set<std::string> seen;
 
@@ -260,33 +284,10 @@ std::vector<DiscoveredHost> discover_moonlight_hosts() {
     }
 
     const std::uint32_t local_ip = ntohl(local_addr.s_addr);
-    const std::uint32_t mask = ntohl(netmask_addr.s_addr);
-    std::uint32_t network = local_ip & mask;
-    std::uint32_t broadcast = ntohl(broadcast_addr.s_addr);
-
-    if (broadcast <= network + 1) {
-        return hosts;
-    }
-
-    std::uint32_t first_host = network + 1;
-    std::uint32_t last_host = broadcast - 1;
-
-    // Avoid huge scans on unusually broad subnets. Most home networks are /24;
-    // on broader networks scan the 3DS's local /24 to keep discovery bounded.
-    if (last_host - first_host + 1 > 254) {
-        network = local_ip & 0xFFFFFF00u;
-        first_host = network + 1;
-        last_host = network + 254;
-    }
-
-    for (std::uint32_t batch_start = first_host; batch_start <= last_host;) {
-        const std::uint32_t batch_end =
-            std::min(last_host, batch_start + kBatchSize - 1);
-        scan_batch(batch_start, batch_end, local_ip, hosts, seen);
-        if (batch_end == UINT32_MAX) {
-            break;
-        }
-        batch_start = batch_end + 1;
+    std::vector<std::uint32_t> networks;
+    moonlight_collect_scan_networks(local_ip, networks, scan_common_subnets);
+    for (const std::uint32_t network : networks) {
+        scan_slash24(network, local_ip, hosts, seen);
     }
 
     std::stable_sort(hosts.begin(), hosts.end(),

@@ -627,6 +627,10 @@ int details_action_at(const touchPosition &touch) {
     }
     return -1;
 }
+
+bool notice_back_touched(const touchPosition &touch) {
+    return touch.py >= kActionBarY;
+}
 } // namespace
 
 bool n3ds_ui_init() {
@@ -990,12 +994,43 @@ void n3ds_ui_message(const std::string &title, const std::string &message,
     }
 
     const std::vector<std::string> lines = wrap_details_text(message);
+    DetailsTouchState touch_state{};
     while (aptMainLoop()) {
         draw_notice_frame(title, lines);
         gspWaitForVBlank();
         hidScanInput();
-        if (hidKeysDown() & (KEY_A | KEY_B | KEY_START)) {
+        const u32 down = hidKeysDown();
+        const u32 held = hidKeysHeld();
+        const u32 up = hidKeysUp();
+
+        if (down & (KEY_A | KEY_B | KEY_START)) {
             return;
+        }
+
+        if (down & KEY_TOUCH) {
+            touchPosition touch{};
+            hidTouchRead(&touch);
+            touch_state.active = true;
+            touch_state.last_x = touch.px;
+            touch_state.last_y = touch.py;
+            touch_state.action = notice_back_touched(touch) ? 0 : -1;
+        }
+
+        if (touch_state.active && (held & KEY_TOUCH)) {
+            touchPosition touch{};
+            hidTouchRead(&touch);
+            touch_state.last_x = touch.px;
+            touch_state.last_y = touch.py;
+        }
+
+        if (touch_state.active && (up & KEY_TOUCH)) {
+            touchPosition release{};
+            release.px = touch_state.last_x;
+            release.py = touch_state.last_y;
+            if (touch_state.action == 0 && notice_back_touched(release)) {
+                return;
+            }
+            touch_state = {};
         }
     }
 }

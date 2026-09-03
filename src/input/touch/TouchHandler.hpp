@@ -98,6 +98,7 @@ class MenuTouchHandler : public TouchHandlerBase {
     void update_touch_target(touchPosition touch);
     void activate_selected();
     void move_selection(int dx, int dy);
+    void change_page(int delta);
 
   private:
     std::shared_ptr<IMessage> message = nullptr;
@@ -109,6 +110,9 @@ class MenuTouchHandler : public TouchHandlerBase {
     int selected_col = 0;
     int last_nav_x = 0;
     int last_nav_y = 0;
+    int page = 0;
+    int touch_start_x = 0;
+    bool touch_page_swipe = false;
 };
 
 class PerformanceTouchHandler : public TouchHandlerBase {

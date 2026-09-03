@@ -115,3 +115,8 @@ void N3dsTouchscreenInput::n3dsinput_handle_navigation(
 bool N3dsTouchscreenInput::captures_gamepad_input() const {
     return handler != nullptr && handler->captures_gamepad_input();
 }
+
+void N3dsTouchscreenInput::open_menu() {
+    next_touch_type.store(N3dsTouchType::MENU_TOUCH);
+    _n3dsinput_set_touch(N3dsTouchType::MENU_TOUCH);
+}
