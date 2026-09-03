@@ -33,7 +33,8 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                           int selected_index,
                           const std::string &secondary_label = "",
                           bool allow_refresh = false,
-                          u64 auto_refresh_ms = 0);
+                          u64 auto_refresh_ms = 0,
+                          const std::string &refresh_label = "Scan");
 
 // Scrollable details/error surface. The top screen owns the diagnostic text;
 // the bottom screen owns touch/joystick scrolling and Back/Save/Retry actions.

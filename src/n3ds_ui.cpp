@@ -29,7 +29,7 @@ constexpr u32 kDisabled = C2D_Color32(84, 92, 104, 255);
 constexpr u32 kDarkText = C2D_Color32(10, 22, 34, 255);
 
 constexpr int kTouchVisibleRows = 4;
-constexpr float kTouchRowsY = 59.0f;
+constexpr float kTouchRowsY = 36.0f;
 constexpr float kTouchRowHeight = 28.0f;
 constexpr float kTouchRowGap = 3.0f;
 constexpr float kTouchRowsBottom =
@@ -112,6 +112,9 @@ std::string compact_action_label(const std::string &label) {
     if (label == "Settings") {
         return "Sets";
     }
+    if (label == "Reload") {
+        return "Sync";
+    }
     return ellipsize(label, 5);
 }
 
@@ -193,19 +196,39 @@ void draw_header(const std::string &title, const std::string &subtitle) {
     C2D_DrawRectSolid(18.0f, 72.0f, 0.4f, 364.0f, 2.0f, kAccent);
 }
 
-void draw_context_preview(const char *label, const std::string &value, float x,
-                          float width) {
-    C2D_DrawRectSolid(x, 184.0f, 0.3f, width, 39.0f, kSurface);
-    draw_text(label, x + 10.0f, 188.0f, kFontMicro, kMuted);
-    draw_text(ellipsize(value, 25), x + 10.0f, 202.0f, kFontSmall, kText);
+enum class ActionKind { Back, Secondary, Refresh, Open };
+
+struct VisibleAction {
+    ActionKind kind;
+    const char *key;
+    std::string label;
+    bool primary;
+};
+
+std::vector<VisibleAction> build_visible_actions(
+    const std::string &secondary_label, bool allow_refresh, bool has_items,
+    const std::string &refresh_label) {
+    std::vector<VisibleAction> actions;
+    actions.push_back({ActionKind::Back, "B", "Back", false});
+    if (!secondary_label.empty()) {
+        actions.push_back(
+            {ActionKind::Secondary, "Y", compact_action_label(secondary_label),
+             false});
+    }
+    if (allow_refresh) {
+        actions.push_back({ActionKind::Refresh, "X",
+                           compact_action_label(refresh_label), false});
+    }
+    if (has_items) {
+        actions.push_back({ActionKind::Open, "A", "Open", true});
+    }
+    return actions;
 }
 
 void draw_top_context(const std::vector<std::string> &items, int selected) {
     if (items.empty()) {
-        C2D_DrawRectSolid(18.0f, 88.0f, 0.3f, 364.0f, 104.0f, kSurface);
-        draw_pill("EMPTY", 32.0f, 101.0f, 56.0f, kAccentSoft, kAccent);
-        draw_text("No hosts yet", 32.0f, 130.0f, kFontSmall, kText);
-        draw_text("Use bottom screen", 32.0f, 154.0f, kFontMicro, kMuted);
+        C2D_DrawRectSolid(18.0f, 88.0f, 0.3f, 364.0f, 72.0f, kSurface);
+        draw_text("No hosts", 32.0f, 118.0f, kFontSmall, kMuted);
         return;
     }
 
@@ -213,28 +236,17 @@ void draw_top_context(const std::vector<std::string> &items, int selected) {
         std::clamp(selected, 0, static_cast<int>(items.size()) - 1);
     const u32 accent = item_accent(items[safe_selected]);
 
-    C2D_DrawRectSolid(18.0f, 87.0f, 0.3f, 364.0f, 84.0f, kSurfaceSelected);
-    C2D_DrawRectSolid(18.0f, 87.0f, 0.45f, 5.0f, 84.0f, accent);
-    draw_pill("SELECTED", 33.0f, 99.0f, 76.0f, kAccentSoft, kAccent);
-
-    char counter[48];
-    std::snprintf(counter, sizeof(counter), "%d / %d", safe_selected + 1,
-                  static_cast<int>(items.size()));
-    draw_pill(counter, 314.0f, 99.0f, 54.0f, kSurfaceRaised, kMuted);
-
-    draw_text(ellipsize(items[safe_selected], 92), 33.0f, 124.0f, kFontBody,
+    C2D_DrawRectSolid(18.0f, 87.0f, 0.3f, 364.0f, 72.0f, kSurfaceSelected);
+    C2D_DrawRectSolid(18.0f, 87.0f, 0.45f, 5.0f, 72.0f, accent);
+    draw_text(ellipsize(items[safe_selected], 92), 33.0f, 110.0f, kFontBody,
               kText, 324.0f);
-    draw_text("Top: context   Bottom: navigation", 33.0f, 152.0f, kFontMicro,
-              kMuted);
 
-    const std::string previous =
-        safe_selected > 0 ? items[safe_selected - 1] : "Start of list";
-    const std::string next =
-        safe_selected + 1 < static_cast<int>(items.size())
-            ? items[safe_selected + 1]
-            : "End of list";
-    draw_context_preview("PREVIOUS", previous, 18.0f, 177.0f);
-    draw_context_preview("NEXT", next, 205.0f, 177.0f);
+    if (items.size() > 1) {
+        char counter[24];
+        std::snprintf(counter, sizeof(counter), "%d/%d", safe_selected + 1,
+                      static_cast<int>(items.size()));
+        draw_text(counter, 330.0f, 96.0f, kFontMicro, kMuted);
+    }
 }
 
 void draw_action_button(float x, float width, const char *key,
@@ -254,29 +266,32 @@ void draw_action_button(float x, float width, const char *key,
 }
 
 void draw_bottom_actions(const std::string &secondary_label,
-                         bool allow_refresh, bool has_items) {
-    constexpr float kActionX0 = 4.0f;
-    constexpr float kActionWidth = 78.0f;
-    constexpr float kActionStep = 78.0f;
+                         bool allow_refresh, bool has_items,
+                         const std::string &refresh_label) {
+    const auto actions = build_visible_actions(secondary_label, allow_refresh,
+                                               has_items, refresh_label);
+    if (actions.empty()) {
+        return;
+    }
 
-    draw_action_button(kActionX0, kActionWidth, "B", "Back", true, false);
-    draw_action_button(kActionX0 + kActionStep, kActionWidth, "Y",
-                       secondary_label.empty() ? "More" : secondary_label,
-                       !secondary_label.empty(), false);
-    draw_action_button(kActionX0 + kActionStep * 2, kActionWidth, "X", "Scan",
-                       allow_refresh, false);
-    draw_action_button(kActionX0 + kActionStep * 3, kActionWidth, "A", "Open",
-                       has_items, true);
+    constexpr float kBarStart = 4.0f;
+    constexpr float kBarWidth = 312.0f;
+    const float slot_width = kBarWidth / static_cast<float>(actions.size());
+
+    for (std::size_t i = 0; i < actions.size(); ++i) {
+        const float x = kBarStart + slot_width * static_cast<float>(i);
+        draw_action_button(x, slot_width - 2.0f, actions[i].key,
+                           actions[i].label, true, actions[i].primary);
+    }
 }
 
 void draw_bottom_touch_menu(const std::string &title,
                             const std::vector<std::string> &items,
                             int selected,
                             const std::string &secondary_label,
-                            bool allow_refresh) {
+                            bool allow_refresh,
+                            const std::string &refresh_label) {
     draw_text(ellipsize(title, 25), 10.0f, 8.0f, kFontTitle, kText);
-    draw_pill("TOUCH", 252.0f, 6.0f, 58.0f, kAccentSoft, kAccent);
-    draw_text("Tap / stick to move", 10.0f, 34.0f, kFontMicro, kMuted);
 
     if (!items.empty()) {
         const int safe_selected =
@@ -304,15 +319,10 @@ void draw_bottom_touch_menu(const std::string &title,
             draw_text(ellipsize(items[item_index], 44), 18.0f, y + 4.0f,
                       kFontSmall, is_selected ? kText : kMuted);
         }
-    } else {
-        C2D_DrawRectSolid(7.0f, kTouchRowsY, 0.3f, 306.0f, 58.0f, kSurface);
-        draw_text(ellipsize("Refresh or Add below", 22), 18.0f,
-                  kTouchRowsY + 10.0f, kFontSmall, kText);
-        draw_text("Tap X to scan", 18.0f, kTouchRowsY + 34.0f, kFontMicro,
-                  kMuted);
     }
 
-    draw_bottom_actions(secondary_label, allow_refresh, !items.empty());
+    draw_bottom_actions(secondary_label, allow_refresh, !items.empty(),
+                        refresh_label);
 }
 
 void begin_frame() {
@@ -333,8 +343,8 @@ void end_frame() {
 
 void draw_menu_frame(const std::string &title, const std::string &subtitle,
                      const std::vector<std::string> &items, int selected,
-                     const std::string &secondary_label,
-                     bool allow_refresh) {
+                     const std::string &secondary_label, bool allow_refresh,
+                     const std::string &refresh_label) {
     begin_frame();
 
     C2D_SceneBegin(n3ds_graphics_top_target());
@@ -343,7 +353,7 @@ void draw_menu_frame(const std::string &title, const std::string &subtitle,
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
     draw_bottom_touch_menu(title, items, selected, secondary_label,
-                           allow_refresh);
+                           allow_refresh, refresh_label);
 
     end_frame();
 }
@@ -372,50 +382,57 @@ int touch_row_at(const std::vector<std::string> &items, int selected,
     return index < static_cast<int>(items.size()) ? index : -1;
 }
 
-int action_column_at(const touchPosition &touch) {
+int action_column_at(const touchPosition &touch,
+                     const std::string &secondary_label, bool allow_refresh,
+                     bool has_items, const std::string &refresh_label) {
     if (touch.py < kActionBarY || touch.py > kActionBarY + kActionBarHeight) {
         return -1;
     }
-    if (touch.px < 82) {
-        return 0;
+
+    const auto actions = build_visible_actions(secondary_label, allow_refresh,
+                                               has_items, refresh_label);
+    if (actions.empty()) {
+        return -1;
     }
-    if (touch.px < 160) {
-        return 1;
+
+    constexpr float kBarStart = 4.0f;
+    constexpr float kBarWidth = 312.0f;
+    const float slot_width = kBarWidth / static_cast<float>(actions.size());
+    if (touch.px < kBarStart) {
+        return -1;
     }
-    if (touch.px < 238) {
-        return 2;
+
+    const int column = static_cast<int>((touch.px - kBarStart) / slot_width);
+    if (column < 0 || column >= static_cast<int>(actions.size())) {
+        return -1;
     }
-    return 3;
+    return column;
 }
 
-bool action_from_column(int column, bool has_items, bool has_secondary,
-                        bool allow_refresh, UiMenuResult &result,
+bool action_from_column(int column, const std::string &secondary_label,
+                        bool allow_refresh, bool has_items,
+                        const std::string &refresh_label, UiMenuResult &result,
                         int selected) {
+    const auto actions = build_visible_actions(secondary_label, allow_refresh,
+                                               has_items, refresh_label);
     result.index = selected;
-    switch (column) {
-    case 0:
+    if (column < 0 || column >= static_cast<int>(actions.size())) {
+        return false;
+    }
+
+    switch (actions[(size_t)column].kind) {
+    case ActionKind::Back:
         result.action = UiMenuAction::Back;
         return true;
-    case 1:
-        if (has_secondary) {
-            result.action = UiMenuAction::Secondary;
-            return true;
-        }
-        break;
-    case 2:
-        if (allow_refresh) {
-            result.action = UiMenuAction::Refresh;
-            return true;
-        }
-        break;
-    case 3:
-        if (has_items) {
-            result.action = UiMenuAction::Select;
-            return true;
-        }
-        break;
-    default:
-        break;
+    case ActionKind::Secondary:
+        result.action = UiMenuAction::Secondary;
+        return true;
+    case ActionKind::Refresh:
+        result.action = UiMenuAction::Refresh;
+        return true;
+    case ActionKind::Open:
+        result.action = UiMenuAction::Select;
+        return true;
     }
     return false;
 }
@@ -655,8 +672,8 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
                           const std::vector<std::string> &items,
                           int selected_index,
                           const std::string &secondary_label,
-                          bool allow_refresh,
-                          u64 auto_refresh_ms) {
+                          bool allow_refresh, u64 auto_refresh_ms,
+                          const std::string &refresh_label) {
     UiMenuResult result{};
     if (!n3ds_graphics_shell_active()) {
         return result;
@@ -688,7 +705,7 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
 
         if (dirty) {
             draw_menu_frame(title, subtitle, items, selected, secondary_label,
-                            allow_refresh);
+                            allow_refresh, refresh_label);
             dirty = false;
         }
 
@@ -761,7 +778,9 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
             touch_state.start_y = touch.py;
             touch_state.last_x = touch.px;
             touch_state.last_y = touch.py;
-            touch_state.action_column = action_column_at(touch);
+            touch_state.action_column = action_column_at(
+                touch, secondary_label, allow_refresh, !items.empty(),
+                refresh_label);
             touch_state.pressed_index = -1;
 
             if (touch_state.action_column < 0) {
@@ -812,13 +831,14 @@ UiMenuResult n3ds_ui_menu(const std::string &title,
             release.py = touch_state.last_y;
 
             if (!touch_state.moved) {
-                const int release_column = action_column_at(release);
+                const int release_column = action_column_at(
+                    release, secondary_label, allow_refresh, !items.empty(),
+                    refresh_label);
                 if (touch_state.action_column >= 0 &&
                     release_column == touch_state.action_column) {
-                    if (action_from_column(
-                            release_column, !items.empty(),
-                            !secondary_label.empty(), allow_refresh, result,
-                            selected)) {
+                    if (action_from_column(release_column, secondary_label,
+                                           allow_refresh, !items.empty(),
+                                           refresh_label, result, selected)) {
                         return result;
                     }
                 } else if (touch_state.action_column < 0 &&
@@ -967,9 +987,45 @@ UiDetailsAction n3ds_ui_details(const std::string &title,
     return UiDetailsAction::Back;
 }
 
+void draw_notice_frame(const std::string &title,
+                       const std::vector<std::string> &lines) {
+    begin_frame();
+
+    C2D_SceneBegin(n3ds_graphics_top_target());
+    draw_header(title, "");
+    C2D_DrawRectSolid(18.0f, 86.0f, 0.3f, 364.0f, 120.0f, kSurface);
+    C2D_DrawRectSolid(18.0f, 86.0f, 0.45f, 4.0f, 120.0f, kAccent);
+
+    float y = 96.0f;
+    for (const auto &line : lines) {
+        draw_text(ellipsize(line, 58), 31.0f, y, kFontSmall, kText);
+        y += 22.0f;
+        if (y > 190.0f) {
+            break;
+        }
+    }
+
+    C2D_SceneBegin(n3ds_graphics_bottom_target());
+    draw_action_button(110.0f, 100.0f, "B", "Back", true, false);
+    end_frame();
+}
+
 void n3ds_ui_message(const std::string &title, const std::string &message,
                      const std::string &hint) {
-    (void)n3ds_ui_details(title, message, hint, false, "Retry");
+    (void)hint;
+    if (!n3ds_graphics_shell_active()) {
+        return;
+    }
+
+    const std::vector<std::string> lines = wrap_details_text(message);
+    while (aptMainLoop()) {
+        draw_notice_frame(title, lines);
+        gspWaitForVBlank();
+        hidScanInput();
+        if (hidKeysDown() & (KEY_A | KEY_B | KEY_START)) {
+            return;
+        }
+    }
 }
 
 void n3ds_ui_status(const std::string &title, const std::string &subtitle,
@@ -994,12 +1050,8 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     }
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
-    draw_text("Artemis 3DS", 14.0f, 12.0f, kFontBody, kText);
-    draw_pill("WORKING", 14.0f, 41.0f, 72.0f, kAccentSoft, kAccent);
     draw_text(ellipsize(hint, 42), 14.0f, 83.0f, kFontSmall, kMuted);
-    draw_text(ellipsize("Top: progress  Bottom: controls", 42), 14.0f, 108.0f,
-              kFontMicro, kMuted);
-    C2D_DrawRectSolid(14.0f, 140.0f, 0.3f, 292.0f, 3.0f, kSurfaceRaised);
-    C2D_DrawRectSolid(14.0f, 140.0f, 0.4f, 92.0f, 3.0f, kAccent);
+    C2D_DrawRectSolid(14.0f, 120.0f, 0.3f, 292.0f, 3.0f, kSurfaceRaised);
+    C2D_DrawRectSolid(14.0f, 120.0f, 0.4f, 92.0f, 3.0f, kAccent);
     end_frame();
 }

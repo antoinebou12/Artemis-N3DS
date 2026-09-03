@@ -138,10 +138,11 @@ UiMenuResult show_menu(const std::string &title, const std::string &subtitle,
                        const std::vector<std::string> &items, int selected = 0,
                        const std::string &secondary = "",
                        bool allow_refresh = false,
-                       u64 auto_refresh_ms = 0) {
+                       u64 auto_refresh_ms = 0,
+                       const std::string &refresh_label = "Scan") {
     if (n3ds_ui_active()) {
         return n3ds_ui_menu(title, subtitle, items, selected, secondary,
-                            allow_refresh, auto_refresh_ms);
+                            allow_refresh, auto_refresh_ms, refresh_label);
     }
 
     int index = items.empty() ? -1 : std::clamp(selected, 0,
@@ -1214,17 +1215,18 @@ void host_screen(PCONFIGURATION config, PSERVER_DATA server,
         }
 
         std::string subtitle = host.address;
-        subtitle += server->paired ? "   Paired" : "   Not paired";
-        subtitle += "   " + current_profile_name(config);
-        const auto result = show_menu("Host", subtitle, items, selected,
-                                      "Refresh", false);
+        if (server->paired) {
+            subtitle += " · paired";
+        }
+        const auto result = show_menu("Host", subtitle, items, selected, "", true,
+                                      0, "Reload");
         selected = result.index;
 
         if (result.action == UiMenuAction::Back) {
             persist_runtime_config(config);
             return;
         }
-        if (result.action == UiMenuAction::Secondary) {
+        if (result.action == UiMenuAction::Refresh) {
             std::string error;
             if (!reload_server(config, server, error)) {
                 show_message("Refresh Failed", error);
