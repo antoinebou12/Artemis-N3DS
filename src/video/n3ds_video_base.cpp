@@ -39,12 +39,13 @@ VideoDecoderBase::VideoDecoderBase(int width, int height) {
     GSPGPU_FramebufferFormat px_fmt = gfxGetScreenFormat(GFX_TOP);
     pixel_size = gspGetBytesPerPixel(px_fmt);
 
-    renderer = std::make_unique<N3dsRendererMock>();
-
     auto pDispatcher = MessageDispatcher::get_instance();
     pDispatcher->subscribe(MessageType::TOUCH_STATE_CHANGED, this);
     pDispatcher->subscribe(MessageType::KEYBOARD_STATE_CHANGED, this);
     pDispatcher->subscribe(MessageType::EXIT_STREAM, this);
+
+    // Default to gamepad overlay: top = video, bottom = local controls.
+    _accept_touch_state_changed(N3dsTouchType::GAMEPAD);
 }
 
 VideoDecoderBase::~VideoDecoderBase() {

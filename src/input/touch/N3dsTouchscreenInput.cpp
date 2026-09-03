@@ -27,6 +27,8 @@ N3dsTouchscreenInput::N3dsTouchscreenInput(GAMEPAD_STATE *gamepad_in,
       image_height(image_height_in) {
     MessageDispatcher::get_instance()->subscribe(
         MessageType::TOUCH_STATE_CHANGED, this);
+    _n3dsinput_set_touch(N3dsTouchType::GAMEPAD);
+    next_touch_type.store(N3dsTouchType::GAMEPAD);
 };
 
 N3dsTouchscreenInput::~N3dsTouchscreenInput() {

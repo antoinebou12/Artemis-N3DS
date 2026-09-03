@@ -11,6 +11,9 @@ bool g_c3d_initialized = false;
 bool g_c2d_initialized = false;
 
 void wait_gpu_idle() {
+    if (!g_c3d_initialized && !g_c2d_initialized) {
+        return;
+    }
     gspWaitForP3D();
     gspWaitForPPF();
 }

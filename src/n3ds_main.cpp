@@ -1196,6 +1196,12 @@ void init_3ds() {
     }
 
     n3ds_ui_init();
+    if (!n3ds_graphics_shell_active()) {
+        fallback_wait_for_button(
+            "Unable to initialize Artemis UI graphics.\n"
+            "Try restarting the 3DS, then reinstall Moonlight.");
+        exit(1);
+    }
 }
 
 void n3ds_exit_handler() {
