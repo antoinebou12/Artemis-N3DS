@@ -29,7 +29,7 @@ constexpr u32 kDisabled = C2D_Color32(84, 92, 104, 255);
 constexpr u32 kDarkText = C2D_Color32(10, 22, 34, 255);
 
 constexpr int kTouchVisibleRows = 4;
-constexpr float kTouchRowsY = 36.0f;
+constexpr float kTouchRowsY = 10.0f;
 constexpr float kTouchRowHeight = 28.0f;
 constexpr float kTouchRowGap = 3.0f;
 constexpr float kTouchRowsBottom =
@@ -285,14 +285,10 @@ void draw_bottom_actions(const std::string &secondary_label,
     }
 }
 
-void draw_bottom_touch_menu(const std::string &title,
-                            const std::vector<std::string> &items,
-                            int selected,
+void draw_bottom_touch_menu(const std::vector<std::string> &items, int selected,
                             const std::string &secondary_label,
                             bool allow_refresh,
                             const std::string &refresh_label) {
-    draw_text(ellipsize(title, 25), 10.0f, 8.0f, kFontTitle, kText);
-
     if (!items.empty()) {
         const int safe_selected =
             std::clamp(selected, 0, static_cast<int>(items.size()) - 1);
@@ -352,8 +348,8 @@ void draw_menu_frame(const std::string &title, const std::string &subtitle,
     draw_top_context(items, selected);
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
-    draw_bottom_touch_menu(title, items, selected, secondary_label,
-                           allow_refresh, refresh_label);
+    draw_bottom_touch_menu(items, selected, secondary_label, allow_refresh,
+                           refresh_label);
 
     end_frame();
 }
@@ -553,12 +549,14 @@ void draw_details_button(float x, float width, const char *key,
     const u32 background =
         !enabled ? kSurface : (primary ? kAccent : kSurfaceRaised);
     const u32 foreground = !enabled ? kDisabled : (primary ? kDarkText : kText);
-    C2D_DrawRectSolid(x, 181.0f, 0.3f, width, 48.0f, background);
-    draw_pill(key, x + 7.0f, 188.0f, 24.0f,
+    C2D_DrawRectSolid(x, kActionBarY, 0.3f, width, kActionBarHeight,
+                      background);
+    draw_pill(key, x + 4.0f, kActionBarY + 5.0f, 20.0f,
               primary && enabled ? C2D_Color32(174, 221, 255, 255)
                                  : kSurfaceSelected,
               primary && enabled ? kDarkText : foreground);
-    draw_text(ellipsize(label, 10), x + 38.0f, 194.0f, kFontSmall, foreground);
+    draw_text(compact_action_label(label), x + 27.0f, kActionBarY + 11.0f,
+              kFontMicro, foreground);
 }
 
 void draw_details_frame(const std::string &title, const std::string &subtitle,
@@ -568,7 +566,7 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
     begin_frame();
 
     C2D_SceneBegin(n3ds_graphics_top_target());
-    draw_header(title, subtitle.empty() ? "Scrollable details" : subtitle);
+    draw_header(title, subtitle);
     C2D_DrawRectSolid(18.0f, 86.0f, 0.3f, 364.0f, 140.0f, kSurface);
     C2D_DrawRectSolid(18.0f, 86.0f, 0.45f, 4.0f, 140.0f, kAccent);
 
@@ -602,35 +600,8 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
     }
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
-    draw_text("Details & diagnostics", 12.0f, 8.0f, kFontTitle, kText);
-    draw_pill("SCROLL", 247.0f, 6.0f, 63.0f, kAccentSoft, kAccent);
-    draw_text("Swipe vertically or use Circle Pad / C-Stick", 12.0f, 36.0f,
-              kFontMicro, kMuted);
-
-    char position[64];
-    const int first_line = lines.empty() ? 0 : safe_offset + 1;
-    const int last_line = std::min(static_cast<int>(lines.size()),
-                                   safe_offset + kDetailsVisibleLines);
-    std::snprintf(position, sizeof(position), "Lines %d-%d of %d", first_line,
-                  last_line, static_cast<int>(lines.size()));
-    draw_pill(position, 12.0f, 67.0f, 112.0f, kSurfaceRaised, kMuted);
-
     if (!status.empty()) {
-        draw_text(ellipsize(status, 48), 12.0f, 94.0f, kFontMicro, kSuccess);
-    } else {
-        draw_text("X saves this diagnostic to the SD card", 12.0f, 94.0f,
-                  kFontMicro, kMuted);
-    }
-
-    C2D_DrawRectSolid(12.0f, 130.0f, 0.3f, 296.0f, 3.0f, kSurfaceRaised);
-    if (lines.size() > kDetailsVisibleLines) {
-        const float max_offset_f = static_cast<float>(std::max(1, max_offset));
-        const float width = 70.0f;
-        const float travel = 296.0f - width;
-        C2D_DrawRectSolid(12.0f + travel * safe_offset / max_offset_f, 130.0f,
-                          0.4f, width, 3.0f, kAccent);
-    } else {
-        C2D_DrawRectSolid(12.0f, 130.0f, 0.4f, 296.0f, 3.0f, kAccent);
+        draw_text(ellipsize(status, 48), 12.0f, 12.0f, kFontMicro, kSuccess);
     }
 
     draw_details_button(6.0f, 96.0f, "B", "Back", true, false);
@@ -641,7 +612,8 @@ void draw_details_frame(const std::string &title, const std::string &subtitle,
 }
 
 int details_action_at(const touchPosition &touch) {
-    if (touch.py < 177) {
+    if (touch.py < kActionBarY ||
+        touch.py > kActionBarY + kActionBarHeight) {
         return -1;
     }
     if (touch.px < 106) {
@@ -1031,6 +1003,7 @@ void n3ds_ui_message(const std::string &title, const std::string &message,
 void n3ds_ui_status(const std::string &title, const std::string &subtitle,
                     const std::vector<std::string> &lines,
                     const std::string &hint) {
+    (void)hint;
     if (!n3ds_graphics_shell_active()) {
         return;
     }
@@ -1050,8 +1023,7 @@ void n3ds_ui_status(const std::string &title, const std::string &subtitle,
     }
 
     C2D_SceneBegin(n3ds_graphics_bottom_target());
-    draw_text(ellipsize(hint, 42), 14.0f, 83.0f, kFontSmall, kMuted);
-    C2D_DrawRectSolid(14.0f, 120.0f, 0.3f, 292.0f, 3.0f, kSurfaceRaised);
-    C2D_DrawRectSolid(14.0f, 120.0f, 0.4f, 92.0f, 3.0f, kAccent);
+    C2D_DrawRectSolid(24.0f, 118.0f, 0.3f, 272.0f, 3.0f, kSurfaceRaised);
+    C2D_DrawRectSolid(24.0f, 118.0f, 0.4f, 96.0f, 3.0f, kAccent);
     end_frame();
 }
