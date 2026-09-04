@@ -74,6 +74,9 @@ void N3dsTouchscreenInput::_n3dsinput_set_touch(N3dsTouchType touch_type_in) {
     case N3dsTouchType::KEYBOARD:
         handler = std::make_unique<KeyboardTouchHandler>();
         break;
+    case N3dsTouchType::SHORTCUTS_TOUCH:
+        handler = std::make_unique<ShortcutsTouchHandler>();
+        break;
     case N3dsTouchType::ABSOLUTE_TOUCH:
         handler = std::make_unique<MirrorTouchHandler>();
         break;
