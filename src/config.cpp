@@ -24,6 +24,7 @@
 #include "system/pair_record.hpp"
 #include "util.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <getopt.h>
@@ -37,6 +38,31 @@
 #define write_config_int(fd, key, value) fprintf(fd, "%s = %d\n", key, value)
 #define write_config_bool(fd, key, value)                                      \
     fprintf(fd, "%s = %s\n", key, value ? "true" : "false")
+
+namespace {
+PCONFIGURATION g_runtime_config = nullptr;
+
+void apply_presentation_float(const char *key, const char *value) {
+    if (value == nullptr) {
+        return;
+    }
+    char *end = nullptr;
+    const float parsed = std::strtof(value, &end);
+    if (end == value) {
+        return;
+    }
+
+    PresentationState state = global_presentation_state();
+    if (strcmp(key, "presentation_zoom") == 0) {
+        state.zoom = parsed;
+    } else if (strcmp(key, "presentation_pan_x") == 0) {
+        state.pan_x = parsed;
+    } else if (strcmp(key, "presentation_pan_y") == 0) {
+        state.pan_y = parsed;
+    }
+    set_global_presentation_state(state);
+}
+} // namespace
 
 static struct option long_options[] = {
     {"width", required_argument, NULL, 'c'},
@@ -160,6 +186,14 @@ bool config_file_parse(PCONFIGURATION config) {
                     state.mode = mode;
                     set_global_presentation_state(state);
                 }
+            } else if (strcmp(key, "presentation_zoom") == 0 ||
+                       strcmp(key, "presentation_pan_x") == 0 ||
+                       strcmp(key, "presentation_pan_y") == 0) {
+                apply_presentation_float(key, value);
+            } else if (strcmp(key, "presentation_linear_filtering") == 0) {
+                PresentationState state = global_presentation_state();
+                state.linear_filtering = strcmp(value, "false") != 0;
+                set_global_presentation_state(state);
             } else {
                 for (int i = 0; long_options[i].name != NULL; i++) {
                     if (strcmp(long_options[i].name, key) == 0) {
@@ -186,8 +220,16 @@ void config_save(char *filename, PCONFIGURATION config) {
         write_config_string(fd, "profile", config->profile);
     if (config->address != NULL && config->address[0] != '\0')
         write_config_string(fd, "address", config->address);
+
+    const PresentationState presentation = global_presentation_state();
     write_config_string(fd, "presentation_mode",
-                        presentation_mode_name(global_presentation_state().mode));
+                        presentation_mode_name(presentation.mode));
+    fprintf(fd, "presentation_zoom = %.3f\n", presentation.zoom);
+    fprintf(fd, "presentation_pan_x = %.3f\n", presentation.pan_x);
+    fprintf(fd, "presentation_pan_y = %.3f\n", presentation.pan_y);
+    write_config_bool(fd, "presentation_linear_filtering",
+                      presentation.linear_filtering);
+
     write_config_int(fd, "port", config->port);
     write_config_int(fd, "width", config->stream.width);
     write_config_int(fd, "height", config->stream.height);
@@ -212,7 +254,17 @@ void config_save(char *filename, PCONFIGURATION config) {
     fclose(fd);
 }
 
+bool config_save_runtime() {
+    if (g_runtime_config == nullptr) {
+        return false;
+    }
+    char config_path[] = MOONLIGHT_3DS_PATH "/moonlight.conf";
+    config_save(config_path, g_runtime_config);
+    return true;
+}
+
 void config_parse(int argc, char *argv[], PCONFIGURATION config) {
+    g_runtime_config = config;
     LiInitializeStreamConfiguration(&config->stream);
 
     config->stream.bitrate = -1;
