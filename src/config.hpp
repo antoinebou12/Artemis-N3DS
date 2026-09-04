@@ -64,3 +64,8 @@ bool config_file_parse(PCONFIGURATION config);
 void config_parse(int argc, char *argv[], PCONFIGURATION config);
 void parse_argument(int c, char *value, PCONFIGURATION config);
 void config_save(char *filename, PCONFIGURATION config);
+
+// Save the currently active configuration to sd:/3ds/moonlight/moonlight.conf.
+// This is used by in-stream Artemis UI pages (Display/Magnify) so presentation
+// changes survive the next launch without requiring a trip back to settings.
+bool config_save_runtime();
