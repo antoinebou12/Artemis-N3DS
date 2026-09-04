@@ -153,7 +153,16 @@ int main() {
     assert(ten_net.front() == 0x0A000000u);
     assert(std::find(ten_net.begin(), ten_net.end(), 0xC0A84400u) !=
            ten_net.end());
-    assert(kMoonlightPreferredHostIp == 0xC0A84432u);
+    assert(kMoonlightPreferredHostIp == 0xC0A84437u);
+
+    // Remote discovery must never surface loopback/invalid IPv4 literals.
+    assert(moonlight_is_usable_remote_ipv4(0xC0A84437u));
+    assert(moonlight_is_usable_remote_ipv4(0x0A00002Au));
+    assert(!moonlight_is_usable_remote_ipv4(0x7F000001u));
+    assert(!moonlight_is_usable_remote_ipv4(0x7FFFFFFFu));
+    assert(!moonlight_is_usable_remote_ipv4(0x00000000u));
+    assert(!moonlight_is_usable_remote_ipv4(0xE0000001u));
+    assert(!moonlight_is_usable_remote_ipv4(0xFFFFFFFFu));
 
     int hit_row = -1;
     int hit_col = -1;
