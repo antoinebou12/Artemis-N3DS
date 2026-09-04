@@ -96,6 +96,7 @@ void VideoDecoderBase::_accept_touch_state_changed(N3dsTouchType ttype) {
         ttype == N3dsTouchType::MENU_TOUCH ||
         ttype == N3dsTouchType::PERFORMANCE_TOUCH ||
         ttype == N3dsTouchType::MAGNIFY_TOUCH ||
+        ttype == N3dsTouchType::SHORTCUTS_TOUCH ||
         ttype == N3dsTouchType::ABSOLUTE_TOUCH ||
         ttype == N3dsTouchType::DS_TOUCH ||
         ttype == N3dsTouchType::GAMEPAD ||
@@ -115,6 +116,7 @@ void VideoDecoderBase::_accept_touch_state_changed(N3dsTouchType ttype) {
         (active_touch_type == N3dsTouchType::MENU_TOUCH ||
          active_touch_type == N3dsTouchType::PERFORMANCE_TOUCH ||
          active_touch_type == N3dsTouchType::MAGNIFY_TOUCH ||
+         active_touch_type == N3dsTouchType::SHORTCUTS_TOUCH ||
          active_touch_type == N3dsTouchType::ABSOLUTE_TOUCH ||
          active_touch_type == N3dsTouchType::DS_TOUCH ||
          active_touch_type == N3dsTouchType::GAMEPAD ||
@@ -140,6 +142,7 @@ void VideoDecoderBase::_accept_touch_state_changed(N3dsTouchType ttype) {
     case (N3dsTouchType::GAMEPAD):
     case (N3dsTouchType::MOUSEPAD):
     case (N3dsTouchType::KEYBOARD):
+    case (N3dsTouchType::SHORTCUTS_TOUCH):
     case (N3dsTouchType::ABSOLUTE_TOUCH):
     case (N3dsTouchType::DS_TOUCH):
     case (N3dsTouchType::MENU_TOUCH):
