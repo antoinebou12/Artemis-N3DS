@@ -208,6 +208,30 @@ class KeyboardTouchHandler : public TouchHandlerBase {
     std::map<int, keycode_info> *selected_keycodes = nullptr;
 };
 
+class ShortcutsTouchHandler : public TouchHandlerBase {
+  public:
+    ShortcutsTouchHandler();
+    ~ShortcutsTouchHandler() = default;
+
+    bool captures_gamepad_input() const override { return true; }
+    void handle_navigation(u32 keys_down, const circlePosition &cpad,
+                           const circlePosition &cstick) override;
+
+  private:
+    void _handle_touch_down(touchPosition touch) override;
+    void _handle_touch_up(touchPosition touch) override;
+    void _handle_touch_hold(touchPosition touch) override;
+    void paint_page();
+    void activate(int index);
+    void change_page(int delta);
+    int hit_shortcut(touchPosition touch) const;
+
+  private:
+    int page = 0;
+    int selected = 0;
+    int pressed = -1;
+};
+
 class MirrorTouchHandler : public TouchHandlerBase {
   public:
     MirrorTouchHandler();
