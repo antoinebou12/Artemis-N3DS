@@ -401,6 +401,18 @@ std::vector<DiscoveredHost> discover_moonlight_hosts(
 
     std::vector<std::uint32_t> networks;
     moonlight_collect_scan_networks(local_ip, networks, true);
+
+    std::vector<std::uint32_t> first_ips;
+    std::string last_address;
+    std::uint16_t last_port = kGameStreamHttpPort;
+    if (get_last_host(last_address, last_port)) {
+        const std::uint32_t last_ip = ipv4_sort_key(last_address);
+        if (last_ip != UINT32_MAX && moonlight_is_usable_remote_ipv4(last_ip)) {
+            first_ips.push_back(last_ip);
+            moonlight_add_scan_network_from_ip(networks, last_ip);
+        }
+    }
+
     const std::size_t total_estimate =
         estimate_probe_total(networks, local_net, true);
 
@@ -409,19 +421,10 @@ std::vector<DiscoveredHost> discover_moonlight_hosts(
                         std::to_string(kGameStreamHttpPort),
                     hosts);
 
-    std::vector<std::uint32_t> first_ips;
-    first_ips.push_back(kMoonlightPreferredHostIp);
-    std::string last_address;
-    std::uint16_t last_port = kGameStreamHttpPort;
-    if (get_last_host(last_address, last_port)) {
-        const std::uint32_t last_ip = ipv4_sort_key(last_address);
-        if (last_ip != UINT32_MAX && last_ip != kMoonlightPreferredHostIp &&
-            moonlight_is_usable_remote_ipv4(last_ip)) {
-            first_ips.push_back(last_ip);
-        }
+    if (!first_ips.empty()) {
+        probe_ips(first_ips, local_ip, hosts, seen, kPreferredTimeoutUs,
+                  on_progress, title, probed_count, total_estimate);
     }
-    probe_ips(first_ips, local_ip, hosts, seen, kPreferredTimeoutUs,
-              on_progress, title, probed_count, total_estimate);
 
     // Full /24 TCP connect to GameStream HTTP only (no other ports / subnets).
     for (const std::uint32_t network : networks) {

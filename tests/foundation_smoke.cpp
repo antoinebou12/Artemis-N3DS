@@ -130,7 +130,8 @@ int main() {
     assert(connection_termination_user_message(ML_ERROR_PROTECTED_CONTENT)
                .find("DRM") != std::string::npos);
 
-    // Scan stays on the 3DS LAN /24 plus the preferred Moonlight subnet.
+    // Scan stays on the 3DS LAN /24 only. Extra /24s come from last host.
+    // Loopback / multicast / unspecified IPv4 are never treated as remote hosts.
     std::vector<std::uint32_t> local_nets;
     moonlight_collect_scan_networks(0xC0A84464u, local_nets, true);
     assert(local_nets.size() == 1);
@@ -138,10 +139,8 @@ int main() {
 
     std::vector<std::uint32_t> other_lan;
     moonlight_collect_scan_networks(0xC0A8010Au, other_lan, true);
-    assert(other_lan.size() == 2);
+    assert(other_lan.size() == 1);
     assert(other_lan.front() == 0xC0A80100u);
-    assert(std::find(other_lan.begin(), other_lan.end(), 0xC0A84400u) !=
-           other_lan.end());
     assert(std::find(other_lan.begin(), other_lan.end(), 0x0A000000u) ==
            other_lan.end());
     assert(std::find(other_lan.begin(), other_lan.end(), 0xC0A8FE00u) ==
@@ -149,11 +148,14 @@ int main() {
 
     std::vector<std::uint32_t> ten_net;
     moonlight_collect_scan_networks(0x0A00000Au, ten_net, true);
-    assert(ten_net.size() == 2);
+    assert(ten_net.size() == 1);
     assert(ten_net.front() == 0x0A000000u);
-    assert(std::find(ten_net.begin(), ten_net.end(), 0xC0A84400u) !=
-           ten_net.end());
-    assert(kMoonlightPreferredHostIp == 0xC0A84437u);
+
+    moonlight_add_scan_network_from_ip(other_lan, 0xC0A84437u);
+    assert(other_lan.size() == 2);
+    assert(other_lan.back() == 0xC0A84400u);
+    moonlight_add_scan_network_from_ip(other_lan, 0x7F000001u);
+    assert(other_lan.size() == 2);
 
     // Remote discovery must never surface loopback/invalid IPv4 literals.
     assert(moonlight_is_usable_remote_ipv4(0xC0A84437u));
