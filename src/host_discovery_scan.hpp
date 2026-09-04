@@ -4,8 +4,24 @@
 #include <set>
 #include <vector>
 
-constexpr std::uint32_t kMoonlightPreferredHostIp = 0xC0A84432u; // 192.168.68.50
+// Fast-path the user's normal Sunshine host, but never rely on this fixed IP:
+// the last successful host and the full local /24 are still probed every scan.
+constexpr std::uint32_t kMoonlightPreferredHostIp = 0xC0A84437u; // 192.168.68.55
 constexpr std::uint32_t kMoonlightPreferredNetwork = 0xC0A84400u; // 192.168.68.0
+
+inline bool moonlight_is_usable_remote_ipv4(std::uint32_t ip_host_order) {
+    const std::uint8_t first = static_cast<std::uint8_t>(ip_host_order >> 24);
+    if (ip_host_order == 0 || ip_host_order == 0xFFFFFFFFu) {
+        return false;
+    }
+    if (first == 0 || first == 127) {
+        return false; // unspecified / loopback are never remote Moonlight hosts
+    }
+    if (first >= 224) {
+        return false; // multicast / reserved
+    }
+    return true;
+}
 
 inline bool moonlight_is_private_slash24(std::uint32_t network) {
     const std::uint32_t first = network & 0xFFFFFF00u;
