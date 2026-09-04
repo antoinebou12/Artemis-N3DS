@@ -16,6 +16,7 @@
  * You should have received a copy of the GNU General Public License
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
+#include "../../config.hpp"
 #include "../../presentation_state.hpp"
 #include "../../stream_benchmark.hpp"
 #include "../../stream_telemetry_store.hpp"
@@ -42,9 +43,9 @@ enum class MenuTileKind {
     Exit,
     Performance,
     Presentation,
-    ZoomIn,
-    ZoomOut,
+    Filtering,
     ZoomReset,
+    SaveSettings,
     SaveCsv,
     Empty,
 };
@@ -60,10 +61,9 @@ const MenuTile kInputPage[4][2] = {
     {{"Gamepad", MenuTileKind::TouchMode, N3dsTouchType::GAMEPAD},
      {"Mouse", MenuTileKind::TouchMode, N3dsTouchType::MOUSEPAD}},
     {{"Keyboard", MenuTileKind::TouchMode, N3dsTouchType::KEYBOARD},
-     {"Mirror", MenuTileKind::TouchMode, N3dsTouchType::ABSOLUTE_TOUCH}},
+     {"Shortcuts", MenuTileKind::TouchMode, N3dsTouchType::SHORTCUTS_TOUCH}},
     {{"Magnify", MenuTileKind::TouchMode, N3dsTouchType::MAGNIFY_TOUCH},
-     {"Stretch", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
-      PresentationMode::Stretch}},
+     {"", MenuTileKind::Empty}},
     {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
 };
 
@@ -74,14 +74,17 @@ const MenuTile kDisplayPage[4][2] = {
       PresentationMode::Fill}},
     {{"Stretch", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Stretch},
-     {"SBS", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+     {"SBS 3D", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::StereoSideBySide}},
-    {{"Zoom+", MenuTileKind::ZoomIn}, {"Zoom-", MenuTileKind::ZoomOut}},
-    {{"Reset", MenuTileKind::ZoomReset}, {"", MenuTileKind::Empty}},
+    {{"Magnify", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+      PresentationMode::Magnify},
+     {"Filter", MenuTileKind::Filtering}},
+    {{"Reset View", MenuTileKind::ZoomReset},
+     {"Save", MenuTileKind::SaveSettings}},
 };
 
 const MenuTile kSessionPage[4][2] = {
-    {{"Perf", MenuTileKind::Performance}, {"Save", MenuTileKind::SaveCsv}},
+    {{"Perf", MenuTileKind::Performance}, {"CSV", MenuTileKind::SaveCsv}},
     {{"Quit", MenuTileKind::Exit}, {"", MenuTileKind::Empty}},
     {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
     {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
@@ -126,19 +129,21 @@ void apply_presentation_mode(PresentationMode mode) {
     set_global_presentation_state(state);
 }
 
-void adjust_stream_zoom(float delta) {
+void reset_stream_view() {
     PresentationState state = global_presentation_state();
-    state.mode = PresentationMode::Magnify;
-    state.zoom = std::clamp(state.zoom + delta, 1.0f, 4.0f);
+    if (state.mode == PresentationMode::Magnify) {
+        state.zoom = 2.0f;
+    } else {
+        state.zoom = 1.0f;
+    }
+    state.pan_x = 0.0f;
+    state.pan_y = 0.0f;
     set_global_presentation_state(state);
 }
 
-void reset_stream_zoom() {
+void toggle_filtering() {
     PresentationState state = global_presentation_state();
-    state.mode = PresentationMode::Magnify;
-    state.zoom = 2.0f;
-    state.pan_x = 0.0f;
-    state.pan_y = 0.0f;
+    state.linear_filtering = !state.linear_filtering;
     set_global_presentation_state(state);
 }
 
@@ -150,9 +155,8 @@ bool tile_is_live(const MenuTile &tile, const PresentationState &state) {
         tile.touch_type == N3dsTouchType::MAGNIFY_TOUCH) {
         return state.mode == PresentationMode::Magnify;
     }
-    if (tile.kind == MenuTileKind::ZoomIn || tile.kind == MenuTileKind::ZoomOut ||
-        tile.kind == MenuTileKind::ZoomReset) {
-        return state.mode == PresentationMode::Magnify;
+    if (tile.kind == MenuTileKind::Filtering) {
+        return state.linear_filtering;
     }
     return false;
 }
@@ -176,19 +180,19 @@ std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile,
             apply_presentation_mode(tile.presentation);
         }
         return nullptr;
-    case MenuTileKind::ZoomIn:
+    case MenuTileKind::Filtering:
         if (apply_side_effects) {
-            adjust_stream_zoom(0.25f);
-        }
-        return nullptr;
-    case MenuTileKind::ZoomOut:
-        if (apply_side_effects) {
-            adjust_stream_zoom(-0.25f);
+            toggle_filtering();
         }
         return nullptr;
     case MenuTileKind::ZoomReset:
         if (apply_side_effects) {
-            reset_stream_zoom();
+            reset_stream_view();
+        }
+        return nullptr;
+    case MenuTileKind::SaveSettings:
+        if (apply_side_effects) {
+            config_save_runtime();
         }
         return nullptr;
     case MenuTileKind::SaveCsv:
@@ -215,7 +219,7 @@ void paint_select_menu(int page, int selected_row, int selected_col,
     const auto summary = global_stream_telemetry_summary();
     canvas.clear();
 
-    char status[40];
+    char status[48];
     {
         float zoom = presentation.zoom;
         float fps = summary.avg_fps;
@@ -227,9 +231,10 @@ void paint_select_menu(int page, int selected_row, int selected_col,
         }
         const unsigned zoom_x10 = static_cast<unsigned>(zoom * 10.0f + 0.5f);
         const unsigned fps_i = static_cast<unsigned>(fps + 0.5f);
-        std::snprintf(status, sizeof(status), "%s %u.%ux %uf",
+        std::snprintf(status, sizeof(status), "%s %u.%ux %uf %s",
                       presentation_mode_name(presentation.mode), zoom_x10 / 10u,
-                      zoom_x10 % 10u, fps_i);
+                      zoom_x10 % 10u, fps_i,
+                      presentation.linear_filtering ? "LIN" : "PIX");
     }
     draw_header(canvas, "SELECT", status);
 

@@ -37,6 +37,7 @@ enum class N3dsTouchType {
     GAMEPAD,
     MOUSEPAD,
     KEYBOARD,
+    SHORTCUTS_TOUCH,
     ABSOLUTE_TOUCH,
     DS_TOUCH,
     MAGNIFY_TOUCH,

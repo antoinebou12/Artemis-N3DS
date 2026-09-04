@@ -152,43 +152,43 @@ static std::map<int, keycode_info> alt_keycodes{
     {2, {ALT_KC, false}},              // VK_ALT Left alt
     {3, {0x09, false}},                // VK_TAB
     {4, {0x2E, false}},                // VK_DELETE
-    {5, {0x70, false}},                // VK_F1
-    {6, {0x71, false}},                // VK_F2
-    {7, {0x72, false}},                // VK_F3
-    {8, {0x73, false}},                // VK_F4
-    {9, {0x74, false}},                // VK_F5
-    {10, {0x75, false}},               // VK_F6
-    {11, {0x76, false}},               // VK_F7
-    {12, {0x77, false}},               // VK_F8
-    {13, {0x78, false}},               // VK_F9
-    {14, {0x79, false}},               // VK_F10
-    {15, {0xBB, true}},                // VK_EQUALS Note: can be = OR +
-    {16, {0xBD, false}},               // VK_MINUS Note: can be - OR _
-    {17, {0xBB, false}},               // VK_EQUALS Note: can be = OR +
-    {18, {0xBD, true}},                // VK_MINUS Note: can be - OR _
-    {19, {0xC0, false}},               // VK_GRAVE Note: can be ` OR ~
-    {20, {0xDE, false}},               // VK_APOSTROPHE Note: can be ' OR "
-    {21, {0xDE, true}},                // VK_APOSTROPHE Note: can be ' OR "
-    {22, {0xDC, true}},                // VK_BACK_SLASH Note: can be \ or |
-    {23, {0x7A, false}},               // VK_F11
-    {24, {0x7B, false}},               // VK_F12
-    {25, {0xDB, false}},               // VK_BRACELEFT Note: can be [ or {
-    {26, {0xDD, false}},               // VK_BRACERIGHT Note: can be ] or }
-    {27, {0xDB, true}},                // VK_BRACELEFT Note: can be [ or {
-    {28, {0xDD, true}},                // VK_BRACERIGHT Note: can be ] or }
-    {29, {0xBC, true}},                // VK_OEM_102 Note: can be , or <
-    {30, {0xBF, false}},               // VK_SLASH Note: can be / or ?
-    {31, {0x26, false}},               // VK_UP
-    {32, {0xDC, false}},               // VK_BACK_SLASH Note: can be \ or |
-    {33, {0xBE, true}},                // VK_OEM_102 Note: can be . or >
+    {5, {0x31, true}},                 // !
+    {6, {0x32, true}},                 // @
+    {7, {0x33, true}},                 // #
+    {8, {0x34, true}},                 // $
+    {9, {0x35, true}},                 // %
+    {10, {0x36, true}},                // ^
+    {11, {0x37, true}},                // &
+    {12, {0x38, true}},                // *
+    {13, {0x39, true}},                // (
+    {14, {0x30, true}},                // )
+    {15, {0xBB, true}},                // +
+    {16, {0xBD, false}},               // -
+    {17, {0xBB, false}},               // =
+    {18, {0xBD, true}},                // _
+    {19, {0xC0, false}},               // `
+    {20, {0xDE, false}},               // '
+    {21, {0xDE, true}},                // "
+    {22, {0xDC, true}},                // |
+    {23, {0x7A, false}},               // F11
+    {24, {0x7B, false}},               // F12
+    {25, {0xDB, false}},               // [
+    {26, {0xDD, false}},               // ]
+    {27, {0xDB, true}},                // {
+    {28, {0xDD, true}},                // }
+    {29, {0xBC, true}},                // <
+    {30, {0xBF, false}},               // /
+    {31, {0x26, false}},               // UP
+    {32, {0xDC, false}},               // backslash
+    {33, {0xBE, true}},                // >
     {34, {SHIFT_KC, false}},           // VK_SHIFT Left shift
-    {35, {0xBF, true}},                // VK_SLASH Note: can be / or ?
-    {36, {0xBA, true}},                // VK_SEMICOLON Note: can be ; or :
-    {37, {0xBA, false}},               // VK_SEMICOLON Note: can be ; or :
-    {38, {0xC0, true}},                // VK_GRAVE Note: can be ` OR ~
-    {39, {0x25, false}},               // VK_LEFT
-    {40, {0x28, false}},               // VK_DOWN
-    {41, {0x27, false}},               // VK_RIGHT
+    {35, {0xBF, true}},                // ?
+    {36, {0xBA, true}},                // :
+    {37, {0xBA, false}},               // ;
+    {38, {0xC0, true}},                // ~
+    {39, {0x25, false}},               // LEFT
+    {40, {0x28, false}},               // DOWN
+    {41, {0x27, false}},               // RIGHT
     {42, {0x08, false}},               // VK_BACK_SPACE
     {43, {KEYBOARD_SWITCH_KC, false}}, // Special key -- keyboard switch
     {44, {0x5B, false}},               // KEY_LEFTMETA
