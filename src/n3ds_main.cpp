@@ -40,6 +40,7 @@
 #include <http.h>
 
 #include <algorithm>
+#include <atomic>
 #include <exception>
 #include <cctype>
 #include <malloc.h>
@@ -59,6 +60,16 @@
 
 namespace {
 u32 *SOC_buffer = nullptr;
+// Set when HOME → Close Software (or aptShouldClose) ends a stream. Callers
+// must unwind to main and exit instead of restoring Artemis menus.
+std::atomic<bool> g_system_close_requested{false};
+
+bool system_close_requested() {
+    // Only the explicit flag from stream_loop — do not OR aptShouldClose()
+    // here. A sticky close hint after HOME suspend/resume would skip shell
+    // restore and leave a dead black screen when launching another app.
+    return g_system_close_requested.load();
+}
 
 struct SelectedHost {
     std::string address;
@@ -1008,6 +1019,7 @@ static inline void stream_loop(PCONFIGURATION config,
 
     while (!connection_listener->is_connection_closed()) {
         if (!aptMainLoop() || aptShouldClose()) {
+            g_system_close_requested.store(true);
             request_stream_shutdown(connection_listener,
                                     ML_ERROR_GRACEFUL_TERMINATION);
             break;
@@ -1027,6 +1039,8 @@ static inline void stream_loop(PCONFIGURATION config,
 
 bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
                   const RemoteApp &app) {
+    g_system_close_requested.store(false);
+
     if (!moon_video_resolution_is_supported(config->stream.width,
                                             config->stream.height)) {
         show_message("Unsupported Resolution",
@@ -1121,19 +1135,30 @@ bool start_stream(PSERVER_DATA server, PCONFIGURATION config,
 
     stream_loop(config, connection_listener, input_handler);
 
+    const bool closing_app = system_close_requested();
     const std::string stream_end_message =
         connection_listener->termination_user_message();
 
     aptSetHomeAllowed(true);
     n3ds_stream_render_abort();
-    // Give the video thread a couple frames to notice the abort before stop.
-    gspWaitForVBlank();
-    gspWaitForVBlank();
+    if (!closing_app) {
+        // Give the video thread a couple frames to notice the abort before stop.
+        gspWaitForVBlank();
+        gspWaitForVBlank();
+    }
     input_handler.reset();
     aptSetHomeAllowed(true);
     LiInterruptConnection();
     LiStopConnection();
     N3dsConnectionListener::destroy_instance();
+
+    // HOME → Close Software: tear down and leave the process. Do not restore
+    // the Citro2D shell or show menus — that made Close feel endless / broken.
+    if (closing_app) {
+        n3ds_graphics_shutdown();
+        aptSetHomeAllowed(true);
+        return false;
+    }
 
     n3ds_graphics_reset_after_stream();
     aptSetHomeAllowed(true);
@@ -1312,6 +1337,9 @@ void app_browser(PCONFIGURATION config, PSERVER_DATA server,
             const auto &app = visible[(size_t)result.index];
             if (stream_setup(config, host, app)) {
                 start_stream(server, config, app);
+                if (system_close_requested()) {
+                    return;
+                }
             }
             // Stay on the cached list for a fast return; press X Sync to update.
             need_network = false;
@@ -1449,6 +1477,9 @@ void host_screen(PCONFIGURATION config, PSERVER_DATA server,
             switch (result.index) {
             case 0:
                 app_browser(config, server, host);
+                if (system_close_requested()) {
+                    return;
+                }
                 break;
             case 1:
                 stream_settings(config, host);
@@ -1567,7 +1598,14 @@ int main_loop(int argc, char *argv[]) {
         config.profile != nullptr ? config.profile : "";
 
     while (aptMainLoop()) {
+        if (system_close_requested()) {
+            break;
+        }
+
         SelectedHost host = select_host(&config);
+        if (system_close_requested()) {
+            break;
+        }
         if (host.address.empty()) {
             const auto result = show_menu(
                 "Artemis 3DS", "No host selected",
@@ -1586,6 +1624,9 @@ int main_loop(int argc, char *argv[]) {
         }
 
         host_screen(&config, &server, host);
+        if (system_close_requested()) {
+            break;
+        }
     }
     return 0;
 }

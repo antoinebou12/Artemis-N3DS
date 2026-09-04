@@ -82,9 +82,9 @@ class SoftVideoDecoder : public VideoDecoderBase {
                                          int height, int px_size);
 
   private:
-    void *ffmpeg_buffer;
-    size_t ffmpeg_buffer_size;
-    u8 *rgb_img_buffer;
+    void *ffmpeg_buffer = nullptr;
+    size_t ffmpeg_buffer_size = 0;
+    u8 *rgb_img_buffer = nullptr;
 };
 
 class MvdDecoder : public VideoDecoderBase {
@@ -98,10 +98,10 @@ class MvdDecoder : public VideoDecoderBase {
     DecodeReturnStatus _decode(unsigned char *indata, int inlen);
 
   private:
-    void *nal_unit_buffer = NULL;
+    void *nal_unit_buffer = nullptr;
     size_t nal_unit_buffer_size = 0;
-    MVDSTD_Config mvdstd_config;
-    u8 *rgb_img_buffer;
+    MVDSTD_Config mvdstd_config{};
+    u8 *rgb_img_buffer = nullptr;
     bool first_frame = true;
     u64 last_present_ticks = 0;
 };

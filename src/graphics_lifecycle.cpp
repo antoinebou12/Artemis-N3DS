@@ -79,10 +79,17 @@ void release_shell_resources() {
 
 void configure_stream_framebuffers() {
     wait_gpu_idle();
+    // Top needs RGB565 for the video path. Bottom stays BGR8 (same as the
+    // Citro2D shell) so software helper UI never fights a half-committed
+    // RGB565↔BGR8 LCD mode (green scramble / "compressed line").
     gfxSetScreenFormat(GFX_TOP, GSP_RGB565_OES);
-    gfxSetScreenFormat(GFX_BOTTOM, GSP_RGB565_OES);
+    gfxSetScreenFormat(GFX_BOTTOM, GSP_BGR8_OES);
     gfxSetDoubleBuffering(GFX_TOP, false);
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
+    // Format/DB changes only take effect on present.
+    clear_gfx_screen(GFX_TOP);
+    clear_gfx_screen(GFX_BOTTOM);
+    wait_vblanks(1);
 }
 
 bool try_init_shell_targets() {

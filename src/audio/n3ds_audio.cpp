@@ -29,8 +29,8 @@
 #define WAVEBUF_SIZE 16
 bool n3ds_audio_disabled = false;
 
-static OpusMSDecoder *decoder;
-static u8 *audioBuffer;
+static OpusMSDecoder *decoder = nullptr;
+static u8 *audioBuffer = nullptr;
 static int samplesPerFrame;
 static int sampleRate;
 static int channelCount;
@@ -55,9 +55,17 @@ static int n3ds_renderer_init(int audioConfiguration,
         return -1;
     }
 
-    u8 *audioBuffer = (u8 *)linearAlloc(bytes_per_frame * WAVEBUF_SIZE);
-    if (audioBuffer == NULL)
+    // Must assign the file-scope pointer (a prior local shadowed it and leaked
+    // every stream — linear heap exhaustion → black screen after app change).
+    if (audioBuffer != nullptr) {
+        linearFree(audioBuffer);
+        audioBuffer = nullptr;
+    }
+    audioBuffer = (u8 *)linearAlloc(bytes_per_frame * WAVEBUF_SIZE);
+    if (audioBuffer == nullptr) {
+        ndspExit();
         return -1;
+    }
     memset(audioBuffer, 0, bytes_per_frame * WAVEBUF_SIZE);
 
     ndspChnWaveBufClear(0);
@@ -73,6 +81,7 @@ static int n3ds_renderer_init(int audioConfiguration,
     ndspChnSetMix(0, mix);
 
     memset(audio_wave_buf, 0, sizeof(audio_wave_buf));
+    wave_buf_idx = 0;
     for (int i = 0; i < WAVEBUF_SIZE; i++) {
         audio_wave_buf[i].data_vaddr = &audioBuffer[i * bytes_per_frame];
         audio_wave_buf[i].status = NDSP_WBUF_DONE;
@@ -84,17 +93,19 @@ static int n3ds_renderer_init(int audioConfiguration,
 }
 
 static void n3ds_renderer_cleanup() {
-    if (decoder != NULL) {
+    if (decoder != nullptr) {
         opus_multistream_decoder_destroy(decoder);
-        decoder = NULL;
+        decoder = nullptr;
     }
 
     ndspChnWaveBufClear(0);
     ndspExit();
-    if (audioBuffer != NULL) {
-        free(audioBuffer);
-        audioBuffer = NULL;
+    if (audioBuffer != nullptr) {
+        linearFree(audioBuffer);
+        audioBuffer = nullptr;
     }
+    memset(audio_wave_buf, 0, sizeof(audio_wave_buf));
+    wave_buf_idx = 0;
 }
 
 static void n3ds_renderer_decode_and_play_sample(char *data, int length) {

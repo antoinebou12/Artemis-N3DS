@@ -56,12 +56,36 @@ N3dsRendererBase::N3dsRendererBase(gfxScreen_t screen_in, int surface_width_in,
     cmdlist = (u32 *)linearAlloc(CMDLIST_SZ * 4);
     vramFb = vramAlloc(surface_width * surface_height * px_size);
     vramTex = vramAlloc(texture_width * texture_height * px_size);
+    if (cmdlist == nullptr || vramFb == nullptr || vramTex == nullptr) {
+        if (cmdlist != nullptr) {
+            linearFree(cmdlist);
+            cmdlist = nullptr;
+        }
+        if (vramFb != nullptr) {
+            vramFree(vramFb);
+            vramFb = nullptr;
+        }
+        if (vramTex != nullptr) {
+            vramFree(vramTex);
+            vramTex = nullptr;
+        }
+        throw std::runtime_error("Out of VRAM/linear memory for renderer");
+    }
 }
 
 N3dsRendererBase::~N3dsRendererBase() {
-    linearFree(cmdlist);
-    vramFree(vramFb);
-    vramFree(vramTex);
+    if (cmdlist != nullptr) {
+        linearFree(cmdlist);
+        cmdlist = nullptr;
+    }
+    if (vramFb != nullptr) {
+        vramFree(vramFb);
+        vramFb = nullptr;
+    }
+    if (vramTex != nullptr) {
+        vramFree(vramTex);
+        vramTex = nullptr;
+    }
 
     // During QUIT the stream abort path restores the Citro2D shell next.
     // Clearing LCDs here leaves a permanent black frame if shell draw is delayed.
@@ -130,7 +154,8 @@ inline void N3dsRendererBase::draw_perf_counters() {
 void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
     // Abort immediately on QUIT so LiStopConnection never waits forever on a
     // stuck gspWaitForEvent(P3D/PPF).
-    if (!n3ds_stream_render_active() || !gspHasGpuRight()) {
+    if (!n3ds_stream_render_active() || !gspHasGpuRight() || cmdlist == nullptr ||
+        vramFb == nullptr || vramTex == nullptr || source == nullptr) {
         return;
     }
 
@@ -406,8 +431,8 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         draw_perf_counters();
     }
 
-    // Swap only this screen. Passing true also swaps the bottom LCD and
-    // fights the software helper UI (SELECT/Gamepad/Mouse), blacking video
-    // after mode transitions.
-    gfxScreenSwapBuffers(screen, false);
+    // hasStereo only applies to the top screen in 3D mode — it does NOT mean
+    // "swap both LCDs". Using true while 2D made bottom UI look scrambled.
+    const bool stereo = (screen == GFX_TOP) && gfxIs3D();
+    gfxScreenSwapBuffers(screen, stereo);
 }

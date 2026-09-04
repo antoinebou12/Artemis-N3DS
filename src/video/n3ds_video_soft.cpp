@@ -48,6 +48,10 @@ SoftVideoDecoder::SoftVideoDecoder(int videoFormat, int width, int height,
 
     if (y2rInit()) {
         fprintf(stderr, "Failed to initialize Y2R\n");
+        ffmpeg_destroy();
+        free(ffmpeg_buffer);
+        ffmpeg_buffer = nullptr;
+        ffmpeg_buffer_size = 0;
         throw std::runtime_error("Failed to initialize Y2R\n");
     }
     Y2RU_ConversionParams y2r_parameters;
@@ -62,6 +66,11 @@ SoftVideoDecoder::SoftVideoDecoder(int videoFormat, int width, int height,
     int status = Y2RU_SetConversionParams(&y2r_parameters);
     if (status) {
         fprintf(stderr, "Failed to set Y2RU params\n");
+        y2rExit();
+        ffmpeg_destroy();
+        free(ffmpeg_buffer);
+        ffmpeg_buffer = nullptr;
+        ffmpeg_buffer_size = 0;
         throw std::runtime_error("Failed to set Y2RU params\n");
     }
 
@@ -71,6 +80,11 @@ SoftVideoDecoder::SoftVideoDecoder(int videoFormat, int width, int height,
         (u8 *)linearAlloc(texture_width * texture_height * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
+        y2rExit();
+        ffmpeg_destroy();
+        free(ffmpeg_buffer);
+        ffmpeg_buffer = nullptr;
+        ffmpeg_buffer_size = 0;
         throw std::runtime_error("Out of memory!\n");
     }
 }
@@ -78,7 +92,15 @@ SoftVideoDecoder::SoftVideoDecoder(int videoFormat, int width, int height,
 SoftVideoDecoder::~SoftVideoDecoder() {
     ffmpeg_destroy();
     y2rExit();
-    linearFree(rgb_img_buffer);
+    if (rgb_img_buffer != nullptr) {
+        linearFree(rgb_img_buffer);
+        rgb_img_buffer = nullptr;
+    }
+    if (ffmpeg_buffer != nullptr) {
+        free(ffmpeg_buffer);
+        ffmpeg_buffer = nullptr;
+    }
+    ffmpeg_buffer_size = 0;
 }
 
 inline int SoftVideoDecoder::_write_yuv_to_framebuffer(const u8 **source,
@@ -200,7 +222,10 @@ static int soft_video_setup(int videoFormat, int width, int height,
     }
 }
 
-static void soft_video_cleanup() { instance = nullptr; }
+static void soft_video_cleanup() {
+    instance.reset();
+    instance = nullptr;
+}
 
 static int soft_video_submit_decode_unit(PDECODE_UNIT decodeUnit) {
     if (instance == nullptr) {

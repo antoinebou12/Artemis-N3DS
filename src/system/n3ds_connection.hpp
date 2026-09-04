@@ -38,9 +38,10 @@ class N3dsConnectionListener : public ISubscriber {
     // input/dispatcher workers therefore keep the listener alive until they
     // have observed connection_closed and exited.
     static N3dsConnectionListener *create_instance(bool enable_motion) {
-        if (instance == nullptr) {
-            instance = std::make_shared<N3dsConnectionListener>(enable_motion);
-        }
+        // Always start a fresh listener between streams so a stale closed
+        // instance / dangling worker ownership cannot poison the next app.
+        destroy_instance();
+        instance = std::make_shared<N3dsConnectionListener>(enable_motion);
         return instance.get();
     }
 

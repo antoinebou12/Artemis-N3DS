@@ -84,6 +84,7 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
         (u8 *)linearAlloc(texture_width * texture_height * pixel_size);
     if (!rgb_img_buffer) {
         fprintf(stderr, "Out of memory!\n");
+        mvdstdExit();
         throw std::runtime_error("Out of memory");
     }
 
@@ -92,6 +93,9 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
                                         AV_INPUT_BUFFER_PADDING_SIZE);
     if (status) {
         fprintf(stderr, "Out of linear memory!\n");
+        linearFree(rgb_img_buffer);
+        rgb_img_buffer = nullptr;
+        mvdstdExit();
         throw std::runtime_error("Out of linear memory");
     }
     mvdstdGenerateDefaultConfig(&mvdstd_config, width, height, image_width,
@@ -108,8 +112,15 @@ MvdDecoder::MvdDecoder(int videoFormat, int width, int height, int redrawRate,
 
 MvdDecoder::~MvdDecoder() {
     mvdstdExit();
-    linearFree(nal_unit_buffer);
-    linearFree(rgb_img_buffer);
+    if (nal_unit_buffer != nullptr) {
+        linearFree(nal_unit_buffer);
+        nal_unit_buffer = nullptr;
+    }
+    nal_unit_buffer_size = 0;
+    if (rgb_img_buffer != nullptr) {
+        linearFree(rgb_img_buffer);
+        rgb_img_buffer = nullptr;
+    }
 }
 
 DecodeReturnStatus MvdDecoder::_decode(unsigned char *indata, int inlen) {
@@ -255,7 +266,10 @@ static int n3ds_init(int videoFormat, int width, int height, int redrawRate,
     }
 }
 
-static void n3ds_destroy() { instance = nullptr; }
+static void n3ds_destroy() {
+    instance.reset();
+    instance = nullptr;
+}
 
 static int n3ds_submit_decode_unit(PDECODE_UNIT decodeUnit) {
     if (instance == nullptr) {

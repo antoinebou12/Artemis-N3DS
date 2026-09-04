@@ -80,7 +80,9 @@ void BottomCanvas::put(int x, int y, u32 rgb) const {
     if (!ready() || x < 0 || y < 0 || x >= kScreenW || y >= kScreenH) {
         return;
     }
-    const int index = x * kScreenH + (kScreenH - 1 - y);
+    // 3DS LCD FB is portrait: stride pixels along screen-Y, screen-X selects
+    // the column. Touch/UI coords stay landscape 320x240.
+    const int index = x * kFbStride + (kFbStride - 1 - y);
     const u8 r = channel(rgb, 16);
     const u8 g = channel(rgb, 8);
     const u8 b = channel(rgb, 0);
@@ -108,14 +110,14 @@ void BottomCanvas::fill(int x, int y, int w, int h, u32 rgb) const {
     const u8 r = channel(rgb, 16);
     const u8 g = channel(rgb, 8);
     const u8 b = channel(rgb, 0);
+    const int count = y1 - y0;
 
     if (px_size == 2) {
         const u16 pixel = RGB8_to_565(r, g, b);
         auto *dst = reinterpret_cast<u16 *>(fb);
-        // Framebuffer is rotated: columns of screen Y are contiguous.
         for (int px = x0; px < x1; ++px) {
-            const int base = px * kScreenH + (kScreenH - 1 - (y1 - 1));
-            const int count = y1 - y0;
+            // Memory increases as screen-Y decreases; start at y1-1.
+            const int base = px * kFbStride + (kFbStride - y1);
             for (int i = 0; i < count; ++i) {
                 dst[base + i] = pixel;
             }
@@ -123,9 +125,14 @@ void BottomCanvas::fill(int x, int y, int w, int h, u32 rgb) const {
         return;
     }
 
+    // BGR8 (stream bottom default): contiguous column along portrait Y.
     for (int px = x0; px < x1; ++px) {
-        for (int py = y0; py < y1; ++py) {
-            put(px, py, rgb);
+        const int base = (px * kFbStride + (kFbStride - y1)) * px_size;
+        for (int i = 0; i < count; ++i) {
+            const int off = base + i * px_size;
+            fb[off + 0] = b;
+            fb[off + 1] = g;
+            fb[off + 2] = r;
         }
     }
 }
@@ -183,14 +190,14 @@ void BottomCanvas::present() const {
     if (!ready() || !n3ds_stream_render_active()) {
         return;
     }
-    // Never call gfxFlushBuffers() / gfxScreenSwapBuffers() here.
-    // The top-screen GPU path uses GX_DisplayTransfer + swap; a full flush
-    // from the helper UI races that transfer and leaves a permanent black
-    // stream after Gamepad/Mouse/SELECT transitions.
-    const u32 bytes =
-        static_cast<u32>(kScreenW) * static_cast<u32>(kScreenH) *
-        static_cast<u32>(px_size);
+    // Software UI owns only the bottom LCD. Flush this buffer, then commit
+    // bottom (hasStereo is unused for bottom). Never call gfxFlushBuffers() —
+    // that walks both screens and races the top GX_DisplayTransfer path.
+    const u32 bytes = static_cast<u32>(kFbStride) *
+                      static_cast<u32>(GSP_SCREEN_HEIGHT_BOTTOM) *
+                      static_cast<u32>(px_size);
     GSPGPU_FlushDataCache(fb, bytes);
+    gfxScreenSwapBuffers(GFX_BOTTOM, false);
 }
 
 BottomCanvas lock_bottom_canvas() {
@@ -199,13 +206,13 @@ BottomCanvas lock_bottom_canvas() {
         return canvas;
     }
 
-    // Do not call gfxSetScreenFormat during stream — it reallocates LCD
-    // buffers and breaks top-screen video until the next full reconnect.
+    // Do not call gfxSetScreenFormat here — reallocating LCD buffers mid-stream
+    // breaks top-screen video. Stream acquire keeps bottom on BGR8.
     canvas.fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, nullptr, nullptr);
     canvas.px_size = gspGetBytesPerPixel(gfxGetScreenFormat(GFX_BOTTOM));
-    if (canvas.fb == nullptr || canvas.px_size < 2) {
+    if (canvas.fb == nullptr || (canvas.px_size != 2 && canvas.px_size != 3)) {
         canvas.fb = nullptr;
-        canvas.px_size = 2;
+        canvas.px_size = 3;
     }
     return canvas;
 }

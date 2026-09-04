@@ -3,12 +3,19 @@
 #include <3ds.h>
 #include <cstdint>
 
-// Shared RGB565 bottom-screen UI for in-stream helpers (SELECT hub, perf,
-// magnify, gamepad, mouse, keyboard). Citro2D stays off during stream.
+// Shared bottom-screen UI for in-stream helpers (SELECT hub, perf, magnify,
+// gamepad, mouse, keyboard). Citro2D stays off during stream. Bottom LCD is
+// kept BGR8 (shell-native); RGB565 write path is only a fallback.
+//
+// Keep this struct to {fb, px_size} only. A third field was overlapped on the
+// stack by nearby locals (PresentationState) under -O2, corrupting stride and
+// crashing in fill() (Luma Translation-Section).
 
 namespace StreamUi {
 constexpr int kScreenW = 320;
 constexpr int kScreenH = 240;
+// Portrait FB contiguous axis (libctru GSP_SCREEN_WIDTH).
+constexpr int kFbStride = GSP_SCREEN_WIDTH;
 
 constexpr u32 kColBg = 0x0D1117;
 constexpr u32 kColSurface = 0x1D232C;
@@ -23,9 +30,11 @@ constexpr u32 kColDark = 0x0A1622;
 
 struct BottomCanvas {
     u8 *fb = nullptr;
-    int px_size = 2;
+    int px_size = 3;
 
-    bool ready() const { return fb != nullptr && px_size >= 2; }
+    bool ready() const {
+        return fb != nullptr && (px_size == 2 || px_size == 3);
+    }
 
     void put(int x, int y, u32 rgb) const;
     void fill(int x, int y, int w, int h, u32 rgb) const;
