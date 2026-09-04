@@ -32,13 +32,28 @@ struct PendingSocket {
     std::uint32_t ip_host_order = 0;
 };
 
+bool usable_remote_address(const std::string &address) {
+    if (address.empty()) {
+        return false;
+    }
+
+    // Hostnames remain valid. For IPv4 literals, explicitly reject loopback,
+    // unspecified, multicast, and reserved addresses so a stale 127.0.0.1
+    // record can never appear as a remote Sunshine PC on the 3DS.
+    in_addr parsed{};
+    if (inet_pton(AF_INET, address.c_str(), &parsed) != 1) {
+        return true;
+    }
+    return moonlight_is_usable_remote_ipv4(ntohl(parsed.s_addr));
+}
+
 bool parse_saved_address(const std::string &entry, std::string &address,
                          std::uint16_t &port) {
     const auto colon = entry.rfind(':');
     if (colon == std::string::npos) {
         address = entry;
         port = kGameStreamHttpPort;
-        return !address.empty();
+        return usable_remote_address(address);
     }
 
     address = entry.substr(0, colon);
@@ -51,7 +66,7 @@ bool parse_saved_address(const std::string &entry, std::string &address,
     } catch (...) {
         return false;
     }
-    return !address.empty();
+    return usable_remote_address(address);
 }
 
 std::string ip_to_string(std::uint32_t ip_host_order) {
@@ -71,7 +86,7 @@ std::string network_label(std::uint32_t network) {
 void append_if_new(std::vector<DiscoveredHost> &hosts,
                    std::set<std::string> &seen, const std::string &address,
                    std::uint16_t port, bool saved) {
-    if (address.empty()) {
+    if (!usable_remote_address(address)) {
         return;
     }
 
@@ -151,7 +166,7 @@ void probe_ips(const std::vector<std::uint32_t> &ips, std::uint32_t local_ip,
 
         for (size_t i = offset; i < end; ++i) {
             const std::uint32_t ip = ips[i];
-            if (ip == local_ip) {
+            if (ip == local_ip || !moonlight_is_usable_remote_ipv4(ip)) {
                 continue;
             }
             const std::string address = ip_to_string(ip);
@@ -253,11 +268,11 @@ void scan_slash24(std::uint32_t network, std::uint32_t local_ip,
                   const char *title, std::size_t &probed_count,
                   std::size_t total_estimate) {
     static constexpr std::uint8_t kPriorityHosts[] = {
-        1, 50, 68, 100, 254, 2, 10, 20, 80, 101, 150, 200};
-    static constexpr std::uint8_t kWidePriorityHosts[] = {1, 50, 100, 254};
+        55, 1, 50, 68, 100, 254, 2, 10, 20, 80, 101, 150, 200};
+    static constexpr std::uint8_t kWidePriorityHosts[] = {55, 1, 50, 100, 254};
 
     std::vector<std::uint32_t> ips;
-    ips.reserve(priority_only ? (wide_priority ? 4 : 12) : 254);
+    ips.reserve(priority_only ? (wide_priority ? 5 : 13) : 254);
     std::set<std::uint32_t> queued;
 
     const std::uint8_t *priority = wide_priority ? kWidePriorityHosts
@@ -400,7 +415,8 @@ std::vector<DiscoveredHost> discover_moonlight_hosts(
     std::uint16_t last_port = kGameStreamHttpPort;
     if (get_last_host(last_address, last_port)) {
         const std::uint32_t last_ip = ipv4_sort_key(last_address);
-        if (last_ip != UINT32_MAX && last_ip != kMoonlightPreferredHostIp) {
+        if (last_ip != UINT32_MAX && last_ip != kMoonlightPreferredHostIp &&
+            moonlight_is_usable_remote_ipv4(last_ip)) {
             first_ips.push_back(last_ip);
         }
     }
