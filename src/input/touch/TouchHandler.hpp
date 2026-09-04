@@ -94,7 +94,9 @@ class MenuTouchHandler : public TouchHandlerBase {
     void _handle_touch_down(touchPosition touch) override;
     void _handle_touch_up(touchPosition touch) override;
     void _handle_touch_hold(touchPosition touch) override;
-    void paint_page();
+    // Repaints only when the visible state changed, so an idle SELECT hub
+    // stops swapping the bottom framebuffer against the video path.
+    void paint_page(bool force = false);
     void update_touch_target(touchPosition touch);
     void activate_selected();
     void move_selection(int dx, int dy);
@@ -103,6 +105,7 @@ class MenuTouchHandler : public TouchHandlerBase {
   private:
     std::shared_ptr<IMessage> message = nullptr;
     u64 next_nav_repeat_ticks = 0;
+    u32 last_paint_signature = 0;
     int active_row = -1;
     int active_col = -1;
     int selected_row = 0;

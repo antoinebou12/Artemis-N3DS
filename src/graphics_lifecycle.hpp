@@ -25,6 +25,11 @@ void n3ds_graphics_shutdown();
 void n3ds_stream_render_abort();
 bool n3ds_stream_render_active();
 
+// Top-screen surface width for this stream (400, or 800 for wide/SBS input).
+// Stereo SBS only produces 3D from the 800-wide surface.
+void n3ds_stream_set_surface_width(int width);
+int n3ds_stream_surface_width();
+
 bool n3ds_graphics_shell_active();
 C3D_RenderTarget *n3ds_graphics_top_target();
 C3D_RenderTarget *n3ds_graphics_bottom_target();

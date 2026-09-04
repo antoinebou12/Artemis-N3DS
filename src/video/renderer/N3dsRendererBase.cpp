@@ -377,15 +377,11 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         return;
     }
 
-    // VBlank instead of infinite P3D/PPF waits — those hang on QUIT when the
-    // GPU event never arrives after LiInterruptConnection.
-    gspWaitForVBlank();
-    if (!n3ds_stream_render_active()) {
-        return;
-    }
-
+    // GSP runs the queued GX commands in order, so the draw and the transfer
+    // below need no sync between them. One VBlank per frame — before the swap
+    // at the end — is enough, and three of them capped the visible refresh
+    // rate and made bottom-screen swaps fight the top-screen copy.
     GX_ProcessCommandList(cmdlist, cached_cmdlist_len * 4, 2);
-    gspWaitForVBlank();
     if (!n3ds_stream_render_active()) {
         return;
     }

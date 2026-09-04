@@ -17,9 +17,9 @@
  * along with Moonlight; if not, see <http://www.gnu.org/licenses/>.
  */
 #include "../../config.hpp"
+#include "../../graphics_lifecycle.hpp"
 #include "../../presentation_state.hpp"
 #include "../../stream_benchmark.hpp"
-#include "../../stream_telemetry_store.hpp"
 #include "../../system/dispatcher.hpp"
 #include "TouchHandler.hpp"
 #include "select_menu_layout.hpp"
@@ -44,11 +44,14 @@ enum class MenuTileKind {
     Performance,
     Presentation,
     Filtering,
+    ZoomIn,
+    ZoomOut,
     ZoomReset,
-    SaveSettings,
     SaveCsv,
     Empty,
 };
+
+constexpr float kZoomStep = 0.25f;
 
 struct MenuTile {
     const char *label;
@@ -67,6 +70,7 @@ const MenuTile kInputPage[4][2] = {
     {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
 };
 
+// Filter moved to X on this page so both zoom steps and Reset View fit.
 const MenuTile kDisplayPage[4][2] = {
     {{"Fit", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Fit},
@@ -74,30 +78,30 @@ const MenuTile kDisplayPage[4][2] = {
       PresentationMode::Fill}},
     {{"Stretch", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Stretch},
-     {"SBS 3D", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
+     {"Stereo SBS", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::StereoSideBySide}},
     {{"Magnify", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Magnify},
-     {"Filter", MenuTileKind::Filtering}},
-    {{"Reset View", MenuTileKind::ZoomReset},
-     {"Save", MenuTileKind::SaveSettings}},
+     {"Zoom+", MenuTileKind::ZoomIn}},
+    {{"Zoom-", MenuTileKind::ZoomOut}, {"Reset View", MenuTileKind::ZoomReset}},
 };
 
-const MenuTile kSessionPage[4][2] = {
-    {{"Perf", MenuTileKind::Performance}, {"CSV", MenuTileKind::SaveCsv}},
-    {{"Quit", MenuTileKind::Exit}, {"", MenuTileKind::Empty}},
+// Quit first: it is the reason most people open this tab.
+const MenuTile kExitPage[4][2] = {
+    {{"Quit", MenuTileKind::Exit}, {"Perf", MenuTileKind::Performance}},
+    {{"CSV", MenuTileKind::SaveCsv}, {"", MenuTileKind::Empty}},
     {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
     {{"", MenuTileKind::Empty}, {"", MenuTileKind::Empty}},
 };
 
-const char *kTabLabels[3] = {"INPUT", "DISPLAY", "SESSION"};
+const char *kTabLabels[3] = {"INPUT", "DISPLAY", "EXIT"};
 
 const MenuTile &tile_at(int page, int row, int col) {
     if (page == 1) {
         return kDisplayPage[row][col];
     }
     if (page == 2) {
-        return kSessionPage[row][col];
+        return kExitPage[row][col];
     }
     return kInputPage[row][col];
 }
@@ -116,6 +120,12 @@ int axis_dir(int value) {
     return 0;
 }
 
+// Stereo SBS only reaches the two eye framebuffers from an 800-wide surface.
+// Anything narrower stays flat, so the hub says so instead of looking broken.
+bool stereo_surface_available() {
+    return n3ds_stream_surface_width() >= GSP_SCREEN_HEIGHT_TOP_2X;
+}
+
 void apply_presentation_mode(PresentationMode mode) {
     PresentationState state = global_presentation_state();
     state.mode = mode;
@@ -126,6 +136,16 @@ void apply_presentation_mode(PresentationMode mode) {
         state.pan_x = 0.0f;
         state.pan_y = 0.0f;
     }
+    set_global_presentation_state(state);
+    // Persist the mode itself, not every zoom tick: this writes to the SD card
+    // and a write per zoom step would hitch the stream.
+    config_save_runtime();
+}
+
+void adjust_stream_zoom(float delta) {
+    PresentationState state = global_presentation_state();
+    state.mode = PresentationMode::Magnify;
+    state.zoom = std::clamp(state.zoom + delta, 1.0f, 4.0f);
     set_global_presentation_state(state);
 }
 
@@ -139,12 +159,14 @@ void reset_stream_view() {
     state.pan_x = 0.0f;
     state.pan_y = 0.0f;
     set_global_presentation_state(state);
+    config_save_runtime();
 }
 
 void toggle_filtering() {
     PresentationState state = global_presentation_state();
     state.linear_filtering = !state.linear_filtering;
     set_global_presentation_state(state);
+    config_save_runtime();
 }
 
 bool tile_is_live(const MenuTile &tile, const PresentationState &state) {
@@ -157,6 +179,10 @@ bool tile_is_live(const MenuTile &tile, const PresentationState &state) {
     }
     if (tile.kind == MenuTileKind::Filtering) {
         return state.linear_filtering;
+    }
+    if (tile.kind == MenuTileKind::ZoomIn || tile.kind == MenuTileKind::ZoomOut ||
+        tile.kind == MenuTileKind::ZoomReset) {
+        return state.mode == PresentationMode::Magnify;
     }
     return false;
 }
@@ -185,14 +211,19 @@ std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile,
             toggle_filtering();
         }
         return nullptr;
+    case MenuTileKind::ZoomIn:
+        if (apply_side_effects) {
+            adjust_stream_zoom(kZoomStep);
+        }
+        return nullptr;
+    case MenuTileKind::ZoomOut:
+        if (apply_side_effects) {
+            adjust_stream_zoom(-kZoomStep);
+        }
+        return nullptr;
     case MenuTileKind::ZoomReset:
         if (apply_side_effects) {
             reset_stream_view();
-        }
-        return nullptr;
-    case MenuTileKind::SaveSettings:
-        if (apply_side_effects) {
-            config_save_runtime();
         }
         return nullptr;
     case MenuTileKind::SaveCsv:
@@ -207,6 +238,28 @@ std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile,
     return nullptr;
 }
 
+// Everything the hub draws. Painting is skipped when this has not moved, so
+// idle SELECT costs no bottom-screen buffer swaps and never fights top video.
+u32 menu_paint_signature(int page, int selected_row, int selected_col,
+                         int pressed_row, int pressed_col,
+                         const PresentationState &presentation) {
+    float zoom = presentation.zoom;
+    if (!std::isfinite(zoom) || zoom < 1.0f) {
+        zoom = 1.0f;
+    }
+    u32 signature = static_cast<u32>(page & 0x3);
+    signature = (signature << 3) | static_cast<u32>((selected_row + 1) & 0x7);
+    signature = (signature << 2) | static_cast<u32>((selected_col + 1) & 0x3);
+    signature = (signature << 3) | static_cast<u32>((pressed_row + 1) & 0x7);
+    signature = (signature << 2) | static_cast<u32>((pressed_col + 1) & 0x3);
+    signature = (signature << 3) | static_cast<u32>(presentation.mode) ;
+    signature = (signature << 6) |
+                (static_cast<u32>(zoom * 10.0f + 0.5f) & 0x3Fu);
+    signature = (signature << 1) | (presentation.linear_filtering ? 1u : 0u);
+    signature = (signature << 1) | (stereo_surface_available() ? 1u : 0u);
+    return signature | 0x80000000u; // never 0: that means "nothing painted yet"
+}
+
 void paint_select_menu(int page, int selected_row, int selected_col,
                        int pressed_row, int pressed_col) {
     using namespace StreamUi;
@@ -216,25 +269,27 @@ void paint_select_menu(int page, int selected_row, int selected_col,
     }
 
     const PresentationState presentation = global_presentation_state();
-    const auto summary = global_stream_telemetry_summary();
     canvas.clear();
 
     char status[48];
     {
         float zoom = presentation.zoom;
-        float fps = summary.avg_fps;
         if (!std::isfinite(zoom) || zoom < 1.0f) {
             zoom = 1.0f;
         }
-        if (!std::isfinite(fps) || fps < 0.0f) {
-            fps = 0.0f;
-        }
         const unsigned zoom_x10 = static_cast<unsigned>(zoom * 10.0f + 0.5f);
-        const unsigned fps_i = static_cast<unsigned>(fps + 0.5f);
-        std::snprintf(status, sizeof(status), "%s %u.%ux %uf %s",
-                      presentation_mode_name(presentation.mode), zoom_x10 / 10u,
-                      zoom_x10 % 10u, fps_i,
-                      presentation.linear_filtering ? "LIN" : "PIX");
+        if (presentation.mode == PresentationMode::StereoSideBySide &&
+            !stereo_surface_available()) {
+            // Say why the picture stayed flat instead of looking broken.
+            std::snprintf(status, sizeof(status), "STEREO NEEDS 800X240");
+        } else {
+            // Mode and zoom only. Live FPS here meant reading telemetry on
+            // every paint, exactly the work the hub should not be doing.
+            std::snprintf(status, sizeof(status), "%s %u.%ux %s",
+                          presentation_mode_name(presentation.mode),
+                          zoom_x10 / 10u, zoom_x10 % 10u,
+                          presentation.linear_filtering ? "LIN" : "PIX");
+        }
     }
     draw_header(canvas, "SELECT", status);
 
@@ -268,38 +323,10 @@ void paint_select_menu(int page, int selected_row, int selected_col,
         }
     }
 
-    if (page == 2) {
-        char chip[48];
-        std::snprintf(chip, sizeof(chip), "BR %uK DROP %u",
-                      static_cast<unsigned>(summary.bitrate_kbps),
-                      static_cast<unsigned>(summary.dropped_frames));
-        canvas.round_fill(6, SelectMenuLayout::tile_y(2), 308,
-                          SelectMenuLayout::tile_height(), kColRaised);
-        canvas.text_centered(chip, 6,
-                             SelectMenuLayout::tile_y(2) +
-                                 (SelectMenuLayout::tile_height() - 7) / 2,
-                             308, kColText, 1);
-        float dec = summary.avg_decode_ms;
-        float ren = summary.avg_render_ms;
-        if (!std::isfinite(dec) || dec < 0.0f) {
-            dec = 0.0f;
-        }
-        if (!std::isfinite(ren) || ren < 0.0f) {
-            ren = 0.0f;
-        }
-        const unsigned dec_x10 = static_cast<unsigned>(dec * 10.0f + 0.5f);
-        const unsigned ren_x10 = static_cast<unsigned>(ren * 10.0f + 0.5f);
-        std::snprintf(chip, sizeof(chip), "DEC %u.%u REN %u.%u", dec_x10 / 10u,
-                      dec_x10 % 10u, ren_x10 / 10u, ren_x10 % 10u);
-        canvas.round_fill(6, SelectMenuLayout::tile_y(3), 308,
-                          SelectMenuLayout::tile_height(), kColSurface);
-        canvas.text_centered(chip, 6,
-                             SelectMenuLayout::tile_y(3) +
-                                 (SelectMenuLayout::tile_height() - 7) / 2,
-                             308, kColMuted, 1);
-    }
-
-    draw_footer_three(canvas, "B HUB", "L/R TAB", "A OPEN");
+    // Live bitrate/drop/decode chips used to sit here. They crowded Quit and
+    // pulled telemetry on every paint; Perf owns those numbers now.
+    draw_footer_three(canvas, "B HUB", "L/R TAB",
+                      page == 1 ? "X FILT" : "A OPEN");
     canvas.present();
 }
 
@@ -319,8 +346,15 @@ MenuTouchHandler::~MenuTouchHandler() {
     // exit path restores the shell and HOME policy.
 }
 
-void MenuTouchHandler::paint_page() {
+void MenuTouchHandler::paint_page(bool force) {
+    const u32 signature =
+        menu_paint_signature(page, selected_row, selected_col, active_row,
+                             active_col, global_presentation_state());
+    if (!force && signature == last_paint_signature) {
+        return; // nothing on screen would change: no clear, no buffer swap
+    }
     paint_select_menu(page, selected_row, selected_col, active_row, active_col);
+    last_paint_signature = signature;
 }
 
 void MenuTouchHandler::move_selection(int dx, int dy) {
@@ -358,12 +392,16 @@ void MenuTouchHandler::activate_selected() {
 void MenuTouchHandler::handle_navigation(u32 keys_down,
                                          const circlePosition &cpad,
                                          const circlePosition &cstick) {
-    // Already on the hub: B is a no-op (stay on SELECT).
+    // Already on the hub: B changes nothing, so do not repaint either.
     if (keys_down & KEY_B) {
-        paint_page();
         return;
     }
     if (keys_down & KEY_X) {
+        if (page == 1) {
+            toggle_filtering(); // Filter lives on X so Display keeps 8 tiles
+            paint_page();
+            return;
+        }
         MessageDispatcher::get_instance()->post(
             std::make_shared<TouchStateChangedMsg>(
                 N3dsTouchType::PERFORMANCE_TOUCH));

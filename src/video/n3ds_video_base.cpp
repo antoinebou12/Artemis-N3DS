@@ -40,6 +40,8 @@ VideoDecoderBase::VideoDecoderBase(int width, int height) {
     surface_height = GSP_SCREEN_WIDTH;
     surface_width = width > GSP_SCREEN_HEIGHT_TOP ? GSP_SCREEN_HEIGHT_TOP_2X
                                                   : GSP_SCREEN_HEIGHT_TOP;
+    // The SELECT hub reads this to tell whether Stereo SBS can actually work.
+    n3ds_stream_set_surface_width(surface_width);
     image_width = width > MOON_CTR_VIDEO_TEX_W ? MOON_CTR_VIDEO_TEX_W : width;
     image_height =
         height > MOON_CTR_VIDEO_TEX_H ? MOON_CTR_VIDEO_TEX_H : height;

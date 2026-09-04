@@ -170,6 +170,18 @@ void n3ds_stream_render_abort() { g_stream_render_active.store(false); }
 
 bool n3ds_stream_render_active() { return g_stream_render_active.load(); }
 
+namespace {
+// 400 or 800, chosen when the decoder picks the top-screen surface. Stereo SBS
+// can only reach both eyes from the 800-wide surface.
+std::atomic<int> g_stream_surface_width{0};
+} // namespace
+
+void n3ds_stream_set_surface_width(int width) {
+    g_stream_surface_width.store(width);
+}
+
+int n3ds_stream_surface_width() { return g_stream_surface_width.load(); }
+
 void n3ds_graphics_shutdown() {
     n3ds_stream_render_abort();
     release_shell_resources();

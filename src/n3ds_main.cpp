@@ -542,12 +542,13 @@ void choose_presentation(PCONFIGURATION config, const SelectedHost &host) {
 
     const PresentationMode mode = modes[(size_t)result.index];
     if (mode == PresentationMode::StereoSideBySide) {
+        // Switch to the 800x240 SBS profile, then fall through: returning here
+        // left the presentation mode untouched, so Stereo SBS never applied.
         if (const auto *profile = find_stream_profile("Stereo SBS")) {
             config->profile = const_cast<char *>(profile->name);
             apply_stream_profile(config, *profile);
             set_host_profile(host.address, host.port, profile->name);
         }
-        return;
     }
 
     PresentationState state = global_presentation_state();
@@ -560,6 +561,7 @@ void choose_presentation(PCONFIGURATION config, const SelectedHost &host) {
         state.pan_y = 0.0f;
     }
     set_global_presentation_state(state);
+    config_save_runtime();
 }
 
 void choose_resolution(PCONFIGURATION config) {
