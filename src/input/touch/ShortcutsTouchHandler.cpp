@@ -1,5 +1,6 @@
 #include "../../system/dispatcher.hpp"
 #include "TouchHandler.hpp"
+#include "host_shortcuts.hpp"
 #include "stream_bottom_ui.hpp"
 
 #include <Limelight.h>
@@ -7,12 +8,6 @@
 #include <memory>
 
 namespace {
-struct ShortcutDef {
-    const char *label;
-    short key;
-    char modifiers;
-};
-
 constexpr int kCols = 2;
 constexpr int kRows = 4;
 constexpr int kCardX = 6;
@@ -22,36 +17,15 @@ constexpr int kCardW = 151;
 constexpr int kCardH = 36;
 constexpr int kFooterY = 210;
 
-const ShortcutDef kWindowsShortcuts[kRows * kCols] = {
-    {"ALT TAB", 0x09, MODIFIER_ALT},
-    {"WIN TAB", 0x09, MODIFIER_META},
-    {"SHOW DESKTOP", 0x44, MODIFIER_META},
-    {"EXPLORER", 0x45, MODIFIER_META},
-    {"RUN", 0x52, MODIFIER_META},
-    {"LOCK", 0x4C, MODIFIER_META},
-    {"START", 0x1B, MODIFIER_CTRL},
-    {"TASK MGR", 0x1B, MODIFIER_CTRL | MODIFIER_SHIFT},
-};
-
-const ShortcutDef kMacShortcuts[kRows * kCols] = {
-    {"CMD TAB", 0x09, MODIFIER_META},
-    {"SPOTLIGHT", 0x20, MODIFIER_META},
-    {"COPY", 0x43, MODIFIER_META},
-    {"PASTE", 0x56, MODIFIER_META},
-    {"CLOSE", 0x57, MODIFIER_META},
-    {"QUIT", 0x51, MODIFIER_META},
-    {"SCREENSHOT", 0x34, MODIFIER_META | MODIFIER_SHIFT},
-    {"FORCE QUIT", 0x1B, MODIFIER_META | MODIFIER_ALT},
-};
-
-const ShortcutDef &shortcut_at(int page, int index) {
+const HostShortcut &shortcut_at(int page, int index) {
     index = std::clamp(index, 0, kRows * kCols - 1);
-    return page == 0 ? kWindowsShortcuts[index] : kMacShortcuts[index];
+    return kHostShortcutPages[page].shortcuts[index];
 }
 
-void send_shortcut(const ShortcutDef &shortcut) {
-    LiSendKeyboardEvent(shortcut.key, KEY_ACTION_DOWN, shortcut.modifiers);
-    LiSendKeyboardEvent(shortcut.key, KEY_ACTION_UP, shortcut.modifiers);
+void send_shortcut(const HostShortcut &shortcut) {
+    send_host_shortcut(shortcut, [](short key, char action, char modifiers) {
+        LiSendKeyboardEvent(key, action, modifiers);
+    });
 }
 
 void go_menu() {
@@ -70,7 +44,7 @@ void ShortcutsTouchHandler::paint_page() {
     }
 
     canvas.clear();
-    draw_header(canvas, "SHORTCUTS", page == 0 ? "WINDOWS" : "MAC");
+    draw_header(canvas, "SHORTCUTS", kHostShortcutPages[page].label);
 
     for (int row = 0; row < kRows; ++row) {
         for (int col = 0; col < kCols; ++col) {
@@ -83,7 +57,7 @@ void ShortcutsTouchHandler::paint_page() {
         }
     }
 
-    draw_footer_three(canvas, "B HUB", "L/R OS", "A SEND");
+    draw_footer_three(canvas, "B HUB", "L/R PAGE", "A SEND");
     canvas.present();
 }
 
@@ -94,7 +68,8 @@ void ShortcutsTouchHandler::activate(int index) {
 }
 
 void ShortcutsTouchHandler::change_page(int delta) {
-    page = (page + delta + 2) % 2;
+    const int count = static_cast<int>(kHostShortcutPages.size());
+    page = (page + delta + count) % count;
     selected = 0;
     pressed = -1;
     paint_page();

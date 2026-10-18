@@ -7,6 +7,7 @@
 #include "connection_status.hpp"
 #include "host_discovery_scan.hpp"
 #include "input/touch/select_menu_layout.hpp"
+#include "input/touch/host_shortcuts.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -20,6 +21,37 @@ static bool nearly_equal(float a, float b, float epsilon = 0.001f) {
 }
 
 int main() {
+    // Each shortcut holds its modifiers while the main key is pressed, then
+    // releases every key. META needs a real Win/Cmd press, not just a flag.
+    for (const auto &page : kHostShortcutPages) {
+        for (const auto &shortcut : page.shortcuts) {
+            std::array<bool, 256> held{};
+            int main_presses = 0;
+            send_host_shortcut(shortcut, [&](short key, char action, char flags) {
+                assert(flags == 0);
+                assert(key >= 0 && key < static_cast<short>(held.size()));
+                const bool down = action == KEY_ACTION_DOWN;
+                assert(action == KEY_ACTION_DOWN || action == KEY_ACTION_UP);
+                assert(held[key] != down);
+                if (key == shortcut.key && down) {
+                    ++main_presses;
+                    assert(held[0xA0] == bool(shortcut.modifiers & MODIFIER_SHIFT));
+                    assert(held[0xA2] == bool(shortcut.modifiers & MODIFIER_CTRL));
+                    assert(held[0xA4] == bool(shortcut.modifiers & MODIFIER_ALT));
+                    assert(held[0x5B] == bool(shortcut.modifiers & MODIFIER_META));
+                }
+                held[key] = down;
+            });
+            assert(main_presses == 1);
+            assert(std::none_of(held.begin(), held.end(), [](bool down) { return down; }));
+        }
+    }
+    const auto &monitor_left = kHostShortcutPages[1].shortcuts[0];
+    const auto &monitor_right = kHostShortcutPages[1].shortcuts[1];
+    assert(monitor_left.key == 0x25 && monitor_right.key == 0x27);
+    assert(monitor_left.modifiers == (MODIFIER_META | MODIFIER_SHIFT));
+    assert(monitor_right.modifiers == monitor_left.modifiers);
+
     GraphicsLifecycleState graphics;
     assert(graphics.mode() == GraphicsMode::Dormant);
     assert(graphics.acquire_shell());

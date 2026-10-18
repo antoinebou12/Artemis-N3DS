@@ -52,6 +52,21 @@ Full FBI steps: [`dist/INSTALL.md`](dist/INSTALL.md).
 - Drag on the pad to pan; use Zoom+ / Zoom− / Reset on the bottom UI.
 - Hold **L** or **R** while touching to send mouse clicks in the magnified region.
 
+### PC window and monitor shortcuts
+
+While streaming, open **SELECT → Input → Shortcuts**. Use **L/R**, **X**, or
+the middle footer button to cycle through **Windows**, **Displays**, and
+**Mac** pages. Tap an action, or select it with the D-pad and press **A**.
+Press **B** to return to the hub.
+
+On the **Displays** page, **Monitor left/right** moves the active PC window
+between monitors using Windows+Shift+Left/Right. Focus the window first
+with the mouse or **Alt Tab** on the Windows page. **Snap left/right**,
+**Maximize**, and **Minimize** arrange the active window; **Desktop left/right**
+switches Windows virtual desktops. Monitor moves require multiple displays
+in the PC's extended desktop. These actions move the PC window; they do not
+change which monitor Sunshine captures.
+
 ## Configuration
 
 Settings can be changed in-app or in:
