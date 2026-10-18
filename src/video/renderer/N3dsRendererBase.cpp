@@ -22,6 +22,8 @@
 #include "vshader_shbin.h"
 
 #include <3ds.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <stdbool.h>
@@ -33,7 +35,8 @@ bool same_presentation_state(const PresentationState &a,
                              const PresentationState &b) {
     return a.mode == b.mode && a.zoom == b.zoom && a.pan_x == b.pan_x &&
            a.pan_y == b.pan_y &&
-           a.linear_filtering == b.linear_filtering;
+           a.linear_filtering == b.linear_filtering &&
+           a.stereo_depth == b.stereo_depth;
 }
 } // namespace
 
@@ -170,8 +173,22 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         presentation.pan_x = 0.0f;
         presentation.pan_y = 0.0f;
     }
+    // Depth is built here, not sent by the host: both eyes get the same frame
+    // with a small opposite offset. Stereo SBS keeps its own path, where the
+    // two eyes come from the two halves of the host's frame instead.
+    float eye_offset = 0.0f;
+    if (screen == GFX_TOP && surface_width >= GSP_SCREEN_HEIGHT_TOP_2X &&
+        presentation.mode != PresentationMode::StereoSideBySide) {
+        eye_offset = stereo_eye_offset(presentation.stereo_depth,
+                                       osGet3DSliderState());
+        // Quantise, or a slider resting between notches rebuilds the command
+        // list every single frame.
+        eye_offset = std::round(eye_offset * 4096.0f) / 4096.0f;
+    }
+
     const bool presentation_changed =
         !command_list_valid ||
+        eye_offset != cached_eye_offset ||
         !same_presentation_state(presentation, cached_presentation_state);
 
     const int logical_destination_width =
@@ -310,10 +327,8 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         C(GPUREG_INDEXBUFFER_CONFIG, 0x80000000);
         C(GPUREG_RESTART_PRIMITIVE, 1);
 
-        GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 1);
-        GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 0);
-        C(GPUREG_FIXEDATTRIB_INDEX, 0xF);
-
+        // The begin-draw prologue moved into draw_quad below, so stereo can
+        // issue it once per eye.
         union {
             u32 packed[3];
             struct {
@@ -339,25 +354,60 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
         const float hh = 2.0f / surface_width;
         const float ndc_x = geometry.destination_scale_y;
         const float ndc_y = geometry.destination_scale_x;
-        const float tex_left = sw * (1.0f - geometry.source_u_min);
-        const float tex_right = sw * (1.0f - geometry.source_u_max);
         const float tex_top = sh * (1.0f - geometry.source_v_min);
         const float tex_bottom =
             sh * (1.0f - geometry.source_v_max) - hh;
 
-        ATTR(ndc_x, -ndc_y, 0.0, 0.0);
-        ATTR(tex_left, tex_bottom, 0.0, 0.0);
-        ATTR(-ndc_x, -ndc_y, 0.0, 0.0);
-        ATTR(tex_left, tex_top, 0.0, 0.0);
-        ATTR(ndc_x, ndc_y, 0.0, 0.0);
-        ATTR(tex_right, tex_bottom, 0.0, 0.0);
-        ATTR(-ndc_x, ndc_y, 0.0, 0.0);
-        ATTR(tex_right, tex_top, 0.0, 0.0);
+        // `center` and `half` are on the surface_width axis (screen
+        // horizontal): the whole surface for mono, one eye's half each for
+        // stereo. The prologue and epilogue below are one immediate-mode
+        // draw, so a second call simply draws a second quad.
+        auto draw_quad = [&](float center, float half, float u_min,
+                             float u_max) {
+            const float y0 = center - half;
+            const float y1 = center + half;
+            const float tex_left = sw * (1.0f - u_min);
+            const float tex_right = sw * (1.0f - u_max);
 
-        GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 1);
-        GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 0);
-        C(GPUREG_VTX_FUNC, 1);
-        GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 0x8, 0x00000000);
+            GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 1);
+            GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 0);
+            C(GPUREG_FIXEDATTRIB_INDEX, 0xF);
+
+            ATTR(ndc_x, y0, 0.0, 0.0);
+            ATTR(tex_left, tex_bottom, 0.0, 0.0);
+            ATTR(-ndc_x, y0, 0.0, 0.0);
+            ATTR(tex_left, tex_top, 0.0, 0.0);
+            ATTR(ndc_x, y1, 0.0, 0.0);
+            ATTR(tex_right, tex_bottom, 0.0, 0.0);
+            ATTR(-ndc_x, y1, 0.0, 0.0);
+            ATTR(tex_right, tex_top, 0.0, 0.0);
+
+            GPUCMD_AddMaskedWrite(GPUREG_START_DRAW_FUNC0, 1, 1);
+            GPUCMD_AddMaskedWrite(GPUREG_GEOSTAGE_CONFIG2, 1, 0);
+            C(GPUREG_VTX_FUNC, 1);
+            GPUCMD_AddMaskedWrite(GPUREG_PRIMITIVE_CONFIG, 0x8, 0x00000000);
+        };
+
+        if (eye_offset > 0.0f) {
+            // Same frame into both eye halves. Inset the window by the offset
+            // first, then slide each eye by it, so both eyes keep an identical
+            // window width that stays inside the source: no clamping, and no
+            // per-eye magnification difference (which strains more than it
+            // helps). The left eye samples further right, putting its image
+            // further left, which reads as the scene sitting behind the glass.
+            const float window =
+                geometry.source_u_max - geometry.source_u_min;
+            const float delta = window * eye_offset;
+            const float u_min = geometry.source_u_min + delta;
+            const float u_max = geometry.source_u_max - delta;
+            const float eye_half = 0.5f * ndc_y;
+            draw_quad(-0.5f, eye_half, u_min + delta, u_max + delta);
+            draw_quad(0.5f, eye_half, u_min - delta, u_max - delta);
+        } else {
+            draw_quad(0.0f, ndc_y, geometry.source_u_min,
+                      geometry.source_u_max);
+        }
+
         C(GPUREG_FRAMEBUFFER_FLUSH, 1);
         C(GPUREG_FRAMEBUFFER_INVALIDATE, 1);
 
@@ -370,6 +420,7 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
                               cached_cmdlist_len * (u32)sizeof(u32));
 
         cached_presentation_state = presentation;
+        cached_eye_offset = eye_offset;
         command_list_valid = true;
     }
 
@@ -389,27 +440,30 @@ void N3dsRendererBase::write_px_to_framebuffer_gpu(uint8_t *__restrict source) {
     if ((screen == GFX_TOP) && gfxIs3D()) {
         u32 *dest_left =
             (u32 *)gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
-        const auto surface_width_3d = surface_width / 2;
-        GX_DisplayTransfer(
-            (u32 *)vramFb, GX_BUFFER_DIM(surface_height, surface_width_3d),
-            dest_left, GX_BUFFER_DIM(surface_height, surface_width_3d),
-            GX_TRANSFER_OUT_TILED(0) |
-                GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
-                GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
-                GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
-
         u32 *dest_right =
             (u32 *)gfxGetFramebuffer(GFX_TOP, GFX_RIGHT, NULL, NULL);
+        const auto surface_width_3d = surface_width / 2;
         const auto surface_offset_3d =
             surface_height * surface_width * px_size / (sizeof(u32) * 2);
+        const u32 transfer_flags =
+            GX_TRANSFER_OUT_TILED(0) |
+            GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
+            GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
+            GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
+
+        // Each half of the surface is already one eye's picture — either the
+        // two halves of a side-by-side host frame, or the two offset draws
+        // above — so this is a straight copy per eye.
+        GX_DisplayTransfer((u32 *)vramFb,
+                           GX_BUFFER_DIM(surface_height, surface_width_3d),
+                           dest_left,
+                           GX_BUFFER_DIM(surface_height, surface_width_3d),
+                           transfer_flags);
         GX_DisplayTransfer((u32 *)vramFb + surface_offset_3d,
                            GX_BUFFER_DIM(surface_height, surface_width_3d),
                            dest_right,
                            GX_BUFFER_DIM(surface_height, surface_width_3d),
-                           GX_TRANSFER_OUT_TILED(0) |
-                               GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGB565) |
-                               GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB565) |
-                               GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
+                           transfer_flags);
     } else {
         u32 *dest = (u32 *)gfxGetFramebuffer(screen, GFX_LEFT, NULL, NULL);
         GX_DisplayTransfer((u32 *)vramFb,

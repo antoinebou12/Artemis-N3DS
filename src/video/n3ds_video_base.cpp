@@ -38,9 +38,15 @@ void enable_top_magnify() {
 VideoDecoderBase::VideoDecoderBase(int width, int height) {
     n3ds_graphics_acquire_stream();
     surface_height = GSP_SCREEN_WIDTH;
-    surface_width = width > GSP_SCREEN_HEIGHT_TOP ? GSP_SCREEN_HEIGHT_TOP_2X
-                                                  : GSP_SCREEN_HEIGHT_TOP;
-    // The SELECT hub reads this to tell whether Stereo SBS can actually work.
+    // Stereo needs the 800-wide surface to hold two 400-wide eyes. That is not
+    // the same as wide mode — 3D turns wide off — so it works on every model,
+    // and a narrow stream can still be shown in 3D.
+    const bool stereo_wanted =
+        global_presentation_state().stereo_depth != StereoDepth::Off;
+    surface_width = (width > GSP_SCREEN_HEIGHT_TOP || stereo_wanted)
+                        ? GSP_SCREEN_HEIGHT_TOP_2X
+                        : GSP_SCREEN_HEIGHT_TOP;
+    // The SELECT hub reads this to tell whether stereo can work at all.
     n3ds_stream_set_surface_width(surface_width);
     image_width = width > MOON_CTR_VIDEO_TEX_W ? MOON_CTR_VIDEO_TEX_W : width;
     image_height =

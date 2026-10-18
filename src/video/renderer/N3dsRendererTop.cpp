@@ -33,15 +33,25 @@ N3dsRendererTop::N3dsRendererTop(int dest_width, int dest_height, int src_width,
                        px_size, debug_in) {}
 
 void N3dsRendererTop::write_px_to_framebuffer(uint8_t *source) {
-    const bool stereo_sbs =
-        global_presentation_state().mode ==
-            PresentationMode::StereoSideBySide &&
-        surface_width >= GSP_SCREEN_HEIGHT_TOP_2X;
+    const PresentationState presentation = global_presentation_state();
+    const bool wide_surface = surface_width >= GSP_SCREEN_HEIGHT_TOP_2X;
 
-    if (stereo_sbs) {
-        // The host frame contains [left eye | right eye]. The base renderer
-        // produces an 800-wide surface and its 3D copy path sends each 400px
-        // half to the corresponding top-screen eye framebuffer.
+    // The host frame contains [left eye | right eye]. The base renderer
+    // produces an 800-wide surface and its 3D copy path sends each 400px half
+    // to the corresponding top-screen eye framebuffer.
+    const bool stereo_sbs =
+        presentation.mode == PresentationMode::StereoSideBySide && wide_surface;
+    // Depth built from a flat stream needs that same two-eye plumbing.
+    const bool stereo_depth =
+        presentation.stereo_depth != StereoDepth::Off && wide_surface;
+    // A narrow stream only has the wide surface because stereo asked for it.
+    // Leaving 3D would put the top screen into 800px wide mode and overrun the
+    // 400-wide eye framebuffer, so stay in 3D and let a zero offset stand in
+    // for 2D: both eyes then receive an identical picture.
+    const bool stereo_only_surface =
+        wide_surface && image_width <= GSP_SCREEN_HEIGHT_TOP;
+
+    if (stereo_sbs || stereo_depth || stereo_only_surface) {
         ensure_3d_enabled();
     } else {
         // 800-wide 2D streams use wide mode but must not become stereoscopic

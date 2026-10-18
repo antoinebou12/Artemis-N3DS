@@ -192,6 +192,9 @@ class KeyboardTouchHandler : public TouchHandlerBase {
     void _handle_touch_hold(touchPosition touch) override;
 
     keycode_info get_keycode(touchPosition touch);
+    // Paints only when the visible key state changed. One keypress used to
+    // clear and swap the bottom framebuffer up to three times.
+    void redraw();
     void set_screen(const uint8_t *bgr_buffer, int bgr_size);
     void set_screen_key(KeyInfo &key_info);
     void set_shift_keys();
@@ -208,6 +211,8 @@ class KeyboardTouchHandler : public TouchHandlerBase {
     KeyInfo alt_info = {KEY_DISABLED, 128, 192, 0, 37};
     KeyInfo shift_keys = {KEY_SHIFT, 0, GSP_SCREEN_HEIGHT_BOTTOM, 37, 70};
     bool alt_keyboard_active = false;
+    int pressed_key_index = -1;
+    u32 last_paint_signature = 0;
     std::map<int, keycode_info> *selected_keycodes = nullptr;
 };
 

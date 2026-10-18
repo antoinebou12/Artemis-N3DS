@@ -194,6 +194,13 @@ bool config_file_parse(PCONFIGURATION config) {
                 PresentationState state = global_presentation_state();
                 state.linear_filtering = strcmp(value, "false") != 0;
                 set_global_presentation_state(state);
+            } else if (strcmp(key, "presentation_stereo_depth") == 0) {
+                StereoDepth depth = StereoDepth::Soft;
+                if (stereo_depth_from_name(value, depth)) {
+                    PresentationState state = global_presentation_state();
+                    state.stereo_depth = depth;
+                    set_global_presentation_state(state);
+                }
             } else {
                 for (int i = 0; long_options[i].name != NULL; i++) {
                     if (strcmp(long_options[i].name, key) == 0) {
@@ -229,6 +236,8 @@ void config_save(char *filename, PCONFIGURATION config) {
     fprintf(fd, "presentation_pan_y = %.3f\n", presentation.pan_y);
     write_config_bool(fd, "presentation_linear_filtering",
                       presentation.linear_filtering);
+    write_config_string(fd, "presentation_stereo_depth",
+                        stereo_depth_name(presentation.stereo_depth));
 
     write_config_int(fd, "port", config->port);
     write_config_int(fd, "width", config->stream.width);

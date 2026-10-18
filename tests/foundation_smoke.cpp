@@ -1,6 +1,7 @@
 #include "graphics_lifecycle_state.hpp"
 #include "presentation_state.hpp"
 #include "stream_profile.hpp"
+#include "stream_resolution.hpp"
 #include "stream_telemetry.hpp"
 #include "video/video_layout.hpp"
 #include "connection_status.hpp"
@@ -43,6 +44,77 @@ int main() {
     assert(nearly_equal(presentation.pan_y, 1.0f));
     assert(std::strcmp(presentation_mode_name(PresentationMode::StereoSideBySide),
                        "Stereo SBS") == 0);
+
+    // Stereo depth is built on the console from a flat stream, gated by the
+    // physical 3D slider.
+    assert(PresentationState{}.stereo_depth == StereoDepth::Soft);
+    assert(next_stereo_depth(StereoDepth::Off) == StereoDepth::Flat);
+    assert(next_stereo_depth(StereoDepth::Flat) == StereoDepth::Soft);
+    assert(next_stereo_depth(StereoDepth::Soft) == StereoDepth::Full);
+    assert(next_stereo_depth(StereoDepth::Full) == StereoDepth::Off);
+
+    // Off, or slider down, means both eyes get the same picture.
+    assert(nearly_equal(stereo_eye_offset(StereoDepth::Off, 1.0f), 0.0f));
+    assert(nearly_equal(stereo_eye_offset(StereoDepth::Full, 0.0f), 0.0f));
+    // Deeper settings move each eye further, and the slider scales linearly.
+    assert(stereo_eye_offset(StereoDepth::Flat, 1.0f) > 0.0f);
+    assert(stereo_eye_offset(StereoDepth::Soft, 1.0f) >
+           stereo_eye_offset(StereoDepth::Flat, 1.0f));
+    assert(stereo_eye_offset(StereoDepth::Full, 1.0f) >
+           stereo_eye_offset(StereoDepth::Soft, 1.0f));
+    assert(nearly_equal(stereo_eye_offset(StereoDepth::Full, 0.5f),
+                        stereo_eye_offset(StereoDepth::Full, 1.0f) * 0.5f));
+    // Deliberately tiny: even at full depth each eye moves under 1% of width,
+    // so the two windows can never diverge.
+    assert(stereo_eye_offset(StereoDepth::Full, 1.0f) < 0.01f);
+
+    StereoDepth parsed_depth = StereoDepth::Full;
+    assert(stereo_depth_from_name("Off", parsed_depth));
+    assert(parsed_depth == StereoDepth::Off);
+    assert(!stereo_depth_from_name("Deep", parsed_depth));
+    assert(std::strcmp(stereo_depth_name(StereoDepth::Flat), "Flat") == 0);
+    PresentationState bad_depth;
+    bad_depth.stereo_depth = static_cast<StereoDepth>(9);
+    normalize_presentation_state(bad_depth);
+    assert(bad_depth.stereo_depth == StereoDepth::Soft);
+
+    // Match PC keeps the host aspect, stays inside the decoder limits, and
+    // lands on multiples of 8.
+    int match_w = 0;
+    int match_h = 0;
+    assert(moon_match_pc_resolution(1920, 1080, match_w, match_h));
+    assert(match_w == 800 && match_h == 448);
+    assert(moon_match_pc_resolution(1920, 1200, match_w, match_h));
+    assert(match_w % 8 == 0 && match_h % 8 == 0);
+    assert(nearly_equal((float)match_w / match_h, 1920.0f / 1200.0f, 0.02f));
+    assert(moon_match_pc_resolution(1024, 768, match_w, match_h));
+    assert(match_w <= MOON_MATCH_PC_MAX_W && match_h <= MOON_MATCH_PC_MAX_H);
+    assert(moon_video_resolution_is_supported(match_w, match_h));
+    // A very tall PC display still has to fit the surface height.
+    assert(moon_match_pc_resolution(1080, 1920, match_w, match_h));
+    assert(match_h <= MOON_MATCH_PC_MAX_H);
+    assert(!moon_match_pc_resolution(0, 0, match_w, match_h));
+
+    for (const auto &resolution : kStreamResolutions) {
+        assert(moon_video_resolution_is_supported(resolution.width,
+                                                  resolution.height));
+        assert(resolution.width % 8 == 0 && resolution.height % 8 == 0);
+    }
+    const auto text_full = text_readability_presentation(false);
+    assert(text_full.mode == PresentationMode::Fit);
+    assert(!text_full.linear_filtering);
+    assert(text_full.stereo_depth == StereoDepth::Off);
+    const auto text_zoom = text_readability_presentation(true);
+    assert(text_zoom.mode == PresentationMode::Magnify);
+    assert(!text_zoom.linear_filtering);
+    assert(text_zoom.stereo_depth == StereoDepth::Off);
+    const auto text_geometry =
+        compute_presentation_geometry(800, 480, 400, 240, text_zoom);
+    // 2x on a native screen shows a centered 400x240 crop, with no rescaling.
+    assert(nearly_equal(
+        (text_geometry.source_u_max - text_geometry.source_u_min) * 800, 400));
+    assert(nearly_equal(
+        (text_geometry.source_v_max - text_geometry.source_v_min) * 480, 240));
 
     const auto *balanced = find_stream_profile("Balanced");
     assert(balanced != nullptr);

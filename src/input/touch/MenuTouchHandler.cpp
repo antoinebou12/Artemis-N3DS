@@ -44,6 +44,7 @@ enum class MenuTileKind {
     Performance,
     Presentation,
     Filtering,
+    StereoDepthCycle,
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -78,8 +79,7 @@ const MenuTile kDisplayPage[4][2] = {
       PresentationMode::Fill}},
     {{"Stretch", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Stretch},
-     {"Stereo SBS", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
-      PresentationMode::StereoSideBySide}},
+     {"3D", MenuTileKind::StereoDepthCycle}},
     {{"Magnify", MenuTileKind::Presentation, N3dsTouchType::DISABLED,
       PresentationMode::Magnify},
      {"Zoom+", MenuTileKind::ZoomIn}},
@@ -120,10 +120,18 @@ int axis_dir(int value) {
     return 0;
 }
 
-// Stereo SBS only reaches the two eye framebuffers from an 800-wide surface.
-// Anything narrower stays flat, so the hub says so instead of looking broken.
+// Two eyes need the 800-wide surface. It is reserved at stream start when
+// depth is enabled, so turning 3D on mid-session from a narrow stream has
+// nowhere to put the second eye.
 bool stereo_surface_available() {
     return n3ds_stream_surface_width() >= GSP_SCREEN_HEIGHT_TOP_2X;
+}
+
+void cycle_stereo_depth() {
+    PresentationState state = global_presentation_state();
+    state.stereo_depth = next_stereo_depth(state.stereo_depth);
+    set_global_presentation_state(state);
+    config_save_runtime();
 }
 
 void apply_presentation_mode(PresentationMode mode) {
@@ -180,6 +188,9 @@ bool tile_is_live(const MenuTile &tile, const PresentationState &state) {
     if (tile.kind == MenuTileKind::Filtering) {
         return state.linear_filtering;
     }
+    if (tile.kind == MenuTileKind::StereoDepthCycle) {
+        return state.stereo_depth != StereoDepth::Off;
+    }
     if (tile.kind == MenuTileKind::ZoomIn || tile.kind == MenuTileKind::ZoomOut ||
         tile.kind == MenuTileKind::ZoomReset) {
         return state.mode == PresentationMode::Magnify;
@@ -209,6 +220,11 @@ std::shared_ptr<IMessage> message_for_tile(const MenuTile &tile,
     case MenuTileKind::Filtering:
         if (apply_side_effects) {
             toggle_filtering();
+        }
+        return nullptr;
+    case MenuTileKind::StereoDepthCycle:
+        if (apply_side_effects) {
+            cycle_stereo_depth();
         }
         return nullptr;
     case MenuTileKind::ZoomIn:
@@ -257,6 +273,10 @@ u32 menu_paint_signature(int page, int selected_row, int selected_col,
                 (static_cast<u32>(zoom * 10.0f + 0.5f) & 0x3Fu);
     signature = (signature << 1) | (presentation.linear_filtering ? 1u : 0u);
     signature = (signature << 1) | (stereo_surface_available() ? 1u : 0u);
+    signature = (signature << 2) |
+                (static_cast<u32>(presentation.stereo_depth) & 0x3u);
+    // The slider gates depth, and the status line says so.
+    signature = (signature << 1) | (osGet3DSliderState() > 0.0f ? 1u : 0u);
     return signature | 0x80000000u; // never 0: that means "nothing painted yet"
 }
 
@@ -278,10 +298,20 @@ void paint_select_menu(int page, int selected_row, int selected_col,
             zoom = 1.0f;
         }
         const unsigned zoom_x10 = static_cast<unsigned>(zoom * 10.0f + 0.5f);
-        if (presentation.mode == PresentationMode::StereoSideBySide &&
+        if (presentation.stereo_depth != StereoDepth::Off &&
             !stereo_surface_available()) {
-            // Say why the picture stayed flat instead of looking broken.
-            std::snprintf(status, sizeof(status), "STEREO NEEDS 800X240");
+            // Depth was turned on after the stream started, with no room for
+            // the second eye. Say so rather than looking broken.
+            std::snprintf(status, sizeof(status), "3D NEEDS RESTART");
+        } else if (presentation.stereo_depth != StereoDepth::Off &&
+                   !(osGet3DSliderState() > 0.0f)) {
+            // Nothing is wrong: the slider is simply down.
+            std::snprintf(status, sizeof(status), "3D %s  SLIDER UP",
+                          stereo_depth_name(presentation.stereo_depth));
+        } else if (presentation.stereo_depth != StereoDepth::Off) {
+            std::snprintf(status, sizeof(status), "%s 3D %s",
+                          presentation_mode_name(presentation.mode),
+                          stereo_depth_name(presentation.stereo_depth));
         } else {
             // Mode and zoom only. Live FPS here meant reading telemetry on
             // every paint, exactly the work the hub should not be doing.

@@ -64,6 +64,28 @@ That path is legacy (kept so existing pairing and configs keep working). See [`d
 
 Default settings are aimed at New 3DS.
 
+### Resolution and readable text
+
+Open **Settings → Video → Resolution** for native **400×240 (3DS / 3DS XL)**,
+480×288, 640×384, 800×480, 320×240, 640×480, 640×360, 768×432,
+896×504, 1024×512, or 800×240 stereo SBS input. Match PC and custom sizes
+remain available. Ordinary 2D presets use Fit to preserve proportions.
+
+XL screens are physically larger, with the same 400×240 pixels per eye as
+the smaller 3DS. Higher input resolutions can improve source detail, but
+cannot increase the panel's physical resolution. The current video path
+accepts up to **1024×512**, so 720p and 1080p inputs are not supported.
+Start with 400×240 at 30 FPS on original 3DS/XL; larger inputs are intended
+primarily for the New 3DS family and may need a lower frame rate.
+
+In **Settings → Video → Text clarity**, choose **Crisp text** for an unfiltered
+full view, or **Larger text** for an unfiltered 2× view with simulated depth
+disabled. With an 800×480 stream, 2× shows a native-sized 400×240 crop per
+eye. Use the in-stream **Magnify** pad to pan around the desktop. Smooth video
+re-enables linear filtering and preserves your current view. Display changes
+are saved in the existing configuration file. Resolution changes apply to
+the next stream; the host must support the requested input size.
+
 ## Build
 
 ### Docker (easiest)

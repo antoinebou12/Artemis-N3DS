@@ -24,6 +24,7 @@
 #include "hardware_capabilities.hpp"
 #include "presentation_state.hpp"
 #include "stream_profile.hpp"
+#include "stream_resolution.hpp"
 #include "stream_telemetry_store.hpp"
 #include "system/dispatcher.hpp"
 #include "system/message.hpp"
@@ -69,6 +70,28 @@ bool system_close_requested() {
     // here. A sticky close hint after HOME suspend/resume would skip shell
     // restore and leave a dead black screen when launching another app.
     return g_system_close_requested.load();
+}
+
+// Largest display mode the host reported, so the Resolution menu can offer a
+// size with the PC's aspect ratio. choose_resolution() has no server in scope,
+// so record it when a session opens.
+int g_pc_display_width = 0;
+int g_pc_display_height = 0;
+
+void record_host_display_modes(PSERVER_DATA server) {
+    g_pc_display_width = 0;
+    g_pc_display_height = 0;
+    if (server == nullptr) {
+        return;
+    }
+    for (PDISPLAY_MODE mode = server->modes; mode != nullptr;
+         mode = mode->next) {
+        if ((long)mode->width * mode->height >
+            (long)g_pc_display_width * g_pc_display_height) {
+            g_pc_display_width = mode->width;
+            g_pc_display_height = mode->height;
+        }
+    }
 }
 
 struct SelectedHost {
@@ -450,6 +473,7 @@ bool reload_server(PCONFIGURATION config, PSERVER_DATA server,
         error = gs_error != nullptr ? gs_error : "Unable to refresh host session";
         return false;
     }
+    record_host_display_modes(server);
     return true;
 }
 
@@ -565,36 +589,64 @@ void choose_presentation(PCONFIGURATION config, const SelectedHost &host) {
 }
 
 void choose_resolution(PCONFIGURATION config) {
-    const std::vector<std::string> items = {
-        "400x240   All-model compatibility",
-        "800x480   High-detail 2D (New 3DS)",
-        "800x240   Side-by-side stereo (New 3DS)",
-        "Custom...",
-    };
+    // Offered only once a session has reported the host's display modes.
+    int pc_width = 0;
+    int pc_height = 0;
+    const bool has_match_pc =
+        moon_match_pc_resolution(g_pc_display_width, g_pc_display_height,
+                                 pc_width, pc_height);
+
+    std::vector<std::string> items;
+    int selected = -1;
+    for (std::size_t i = 0; i < kStreamResolutions.size(); ++i) {
+        const auto &preset = kStreamResolutions[i];
+        items.emplace_back(preset.label);
+        if (config->stream.width == preset.width &&
+            config->stream.height == preset.height) {
+            selected = static_cast<int>(i);
+        }
+    }
+    const int match_pc_index = static_cast<int>(items.size());
+    if (has_match_pc) {
+        items.push_back("Match PC  " + std::to_string(g_pc_display_width) +
+                        "x" + std::to_string(g_pc_display_height) + " -> " +
+                        std::to_string(pc_width) + "x" +
+                        std::to_string(pc_height));
+    }
+    const int custom_index = (int)items.size();
+    items.push_back("Custom...");
+
+    if (selected < 0) {
+        selected = has_match_pc && config->stream.width == pc_width &&
+                           config->stream.height == pc_height
+                       ? match_pc_index
+                       : custom_index;
+    }
     const auto result = show_menu(
-        "Resolution", "Stream input limit: 1024x512", items);
-    if (result.action != UiMenuAction::Select) {
+        "Resolution", moonlight_hardware_caps().new_3ds
+            ? "Higher detail needs more Wi-Fi; max 1024x512"
+            : "3DS / XL: native 400x240 recommended; max 1024x512",
+        items, selected);
+    if (result.action != UiMenuAction::Select || result.index < 0) {
         return;
     }
 
     const int previous_width = config->stream.width;
     const int previous_height = config->stream.height;
-    switch (result.index) {
-    case 0:
-        config->stream.width = 400;
-        config->stream.height = 240;
-        break;
-    case 1:
-        config->stream.width = 800;
-        config->stream.height = 480;
-        break;
-    case 2:
-        config->stream.width = 800;
-        config->stream.height = 240;
-        set_global_presentation_state(
-            {PresentationMode::StereoSideBySide, 1.0f, 0.0f, 0.0f, true});
-        break;
-    case 3: {
+    const PresentationMode previous_mode = global_presentation_state().mode;
+    PresentationState state = global_presentation_state();
+    if (result.index < static_cast<int>(kStreamResolutions.size())) {
+        const auto &preset =
+            kStreamResolutions[static_cast<std::size_t>(result.index)];
+        config->stream.width = preset.width;
+        config->stream.height = preset.height;
+        state.mode = preset.mode;
+    } else if (has_match_pc && result.index == match_pc_index) {
+        config->stream.width = pc_width;
+        config->stream.height = pc_height;
+        // Fit, so the PC's aspect actually survives on a 5:3 screen.
+        state.mode = PresentationMode::Fit;
+    } else if (result.index == custom_index) {
         const int width = prompt_int("Stream width", config->stream.width);
         const int height = prompt_int("Stream height", config->stream.height);
         if (!moon_video_resolution_is_supported(width, height)) {
@@ -605,16 +657,46 @@ void choose_resolution(PCONFIGURATION config) {
         }
         config->stream.width = width;
         config->stream.height = height;
-        break;
+        state.mode = PresentationMode::Fit;
+    } else {
+        return;
     }
-    default:
-        break;
-    }
+    // Clear SBS and magnification when choosing an ordinary 2D input size.
+    state.zoom = 1.0f;
+    state.pan_x = 0.0f;
+    state.pan_y = 0.0f;
+    set_global_presentation_state(state);
 
     if (config->stream.width != previous_width ||
-        config->stream.height != previous_height) {
+        config->stream.height != previous_height || state.mode != previous_mode) {
         mark_stream_profile_custom(config);
     }
+}
+
+void choose_text_clarity(PCONFIGURATION config) {
+    const auto state = global_presentation_state();
+    const int selected = state.linear_filtering ? 0 :
+        (state.mode == PresentationMode::Magnify ? 2 : 1);
+    const auto result = show_menu(
+        "Text Clarity", "2x text: use Magnify pad to pan while streaming",
+        {"Smooth video", "Crisp text - full view", "Larger text - 2x zoom"},
+        selected);
+    if (result.action != UiMenuAction::Select || result.index < 0 ||
+        result.index > 2) {
+        return;
+    }
+    if (result.index == 0) {
+        PresentationState next = state;
+        next.linear_filtering = true;
+        set_global_presentation_state(next);
+    } else {
+        set_global_presentation_state(
+            text_readability_presentation(result.index == 2));
+    }
+    if (global_presentation_state().mode != state.mode) {
+        mark_stream_profile_custom(config);
+    }
+    config_save_runtime();
 }
 
 void choose_fps(PCONFIGURATION config) {
@@ -694,6 +776,10 @@ void video_settings(PCONFIGURATION config) {
                      : config->video_decoder == SOFTWARE_VIDEO_DECODER
                            ? "Software"
                            : "Disabled"),
+            std::string("Text clarity      ") +
+                (global_presentation_state().linear_filtering ? "Smooth" :
+                 global_presentation_state().mode == PresentationMode::Magnify
+                     ? "Crisp + zoom" : "Crisp"),
         };
         const auto result =
             show_menu("Video", "Resolution, frame rate and decoder", items,
@@ -717,6 +803,9 @@ void video_settings(PCONFIGURATION config) {
             break;
         case 3:
             choose_decoder(config);
+            break;
+        case 4:
+            choose_text_clarity(config);
             break;
         default:
             break;
@@ -1423,6 +1512,7 @@ bool connect_host(PCONFIGURATION config, PSERVER_DATA server,
         return false;
     }
 
+    record_host_display_modes(server);
     if (server->paired) {
         add_pair_address(host.address, host.port);
     }

@@ -75,6 +75,9 @@ class N3dsRendererBase {
     bool letterbox_initialized = false;
     u32 cached_cmdlist_len = 0;
     PresentationState cached_presentation_state{};
+    // Per-eye source-window offset the command list was built with; changes
+    // when the 3D slider moves or the depth setting changes.
+    float cached_eye_offset = 0.0f;
 };
 
 class N3dsRendererTop : public N3dsRendererBase {

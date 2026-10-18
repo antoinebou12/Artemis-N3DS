@@ -117,6 +117,17 @@ void paint_keyboard(bool alt_active, KeyState shift_state, KeyState ctrl_state,
     canvas.present();
 }
 
+u32 keyboard_paint_signature(bool alt_active, KeyState shift_state,
+                             KeyState ctrl_state, KeyState alt_state,
+                             int pressed_idx) {
+    u32 signature = alt_active ? 1u : 0u;
+    signature = (signature << 2) | (static_cast<u32>(shift_state) & 0x3u);
+    signature = (signature << 2) | (static_cast<u32>(ctrl_state) & 0x3u);
+    signature = (signature << 2) | (static_cast<u32>(alt_state) & 0x3u);
+    signature = (signature << 7) | (static_cast<u32>(pressed_idx + 1) & 0x7Fu);
+    return signature | 0x80000000u; // never 0: that means "nothing painted yet"
+}
+
 void go_menu() {
     MessageDispatcher::get_instance()->post(
         std::make_shared<TouchStateChangedMsg>(N3dsTouchType::MENU_TOUCH));
@@ -129,17 +140,28 @@ KeyboardTouchHandler::KeyboardTouchHandler()
     handle_default();
 }
 
+void KeyboardTouchHandler::redraw() {
+    const u32 signature =
+        keyboard_paint_signature(alt_keyboard_active, shift_info.state,
+                                 ctrl_info.state, alt_info.state,
+                                 pressed_key_index);
+    if (signature == last_paint_signature) {
+        return; // identical screen: no clear, no buffer swap
+    }
+    paint_keyboard(alt_keyboard_active, shift_info.state, ctrl_info.state,
+                   alt_info.state, pressed_key_index);
+    last_paint_signature = signature;
+}
+
 void KeyboardTouchHandler::set_screen(const uint8_t *bgr_buffer, int bgr_size) {
     (void)bgr_buffer;
     (void)bgr_size;
-    paint_keyboard(alt_keyboard_active, shift_info.state, ctrl_info.state,
-                   alt_info.state, -1);
+    redraw();
 }
 
 void KeyboardTouchHandler::set_screen_key(KeyInfo &key_info) {
     (void)key_info;
-    paint_keyboard(alt_keyboard_active, shift_info.state, ctrl_info.state,
-                   alt_info.state, -1);
+    redraw();
 }
 
 void KeyboardTouchHandler::set_shift_keys() {
@@ -153,7 +175,7 @@ void KeyboardTouchHandler::set_shift_keys() {
 void KeyboardTouchHandler::handle_default() {
     selected_keycodes = &default_keycodes;
     alt_keyboard_active = false;
-    paint_keyboard(false, shift_info.state, ctrl_info.state, alt_info.state, -1);
+    redraw();
 }
 
 void KeyboardTouchHandler::cycle_key_state(KeyInfo &key_info) {
@@ -177,7 +199,7 @@ void KeyboardTouchHandler::handle_alt_keyboard() {
     } else {
         selected_keycodes = &alt_keycodes;
         alt_keyboard_active = true;
-        paint_keyboard(true, shift_info.state, ctrl_info.state, alt_info.state, -1);
+        redraw();
     }
 }
 
@@ -232,8 +254,11 @@ void KeyboardTouchHandler::_handle_touch_down(touchPosition touch) {
         }
         break;
     }
-    paint_keyboard(alt_keyboard_active, shift_info.state, ctrl_info.state,
-                   alt_info.state, pressed);
+    // Record the press first, then let the modifier/layout changes below land,
+    // and paint once at the end. Painting here as well meant SHIFT or SYM
+    // cleared and swapped the bottom framebuffer three times in one frame,
+    // which showed up as flicker and a stale highlight.
+    pressed_key_index = pressed;
 
     if (active_keycode.code == KEYBOARD_SWITCH_KC) {
         handle_alt_keyboard();
@@ -249,13 +274,14 @@ void KeyboardTouchHandler::_handle_touch_down(touchPosition touch) {
         int modifiers = get_key_mod();
         LiSendKeyboardEvent(active_keycode.code, KEY_ACTION_DOWN, modifiers);
     }
+    redraw();
 }
 
 void KeyboardTouchHandler::_handle_touch_up(touchPosition touch) {
     (void)touch;
+    pressed_key_index = -1;
     if (active_keycode.code <= KEYBOARD_SWITCH_KC) {
-        paint_keyboard(alt_keyboard_active, shift_info.state, ctrl_info.state,
-                       alt_info.state, -1);
+        redraw();
         return;
     }
 
@@ -276,8 +302,7 @@ void KeyboardTouchHandler::_handle_touch_up(touchPosition touch) {
         }
     }
     active_keycode = {-1, false};
-    paint_keyboard(alt_keyboard_active, shift_info.state, ctrl_info.state,
-                   alt_info.state, -1);
+    redraw();
 }
 
 void KeyboardTouchHandler::_handle_touch_hold(touchPosition touch) {

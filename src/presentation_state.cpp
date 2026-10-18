@@ -7,6 +7,15 @@ namespace {
 PresentationState g_presentation_state{};
 }
 
+PresentationState text_readability_presentation(bool magnify) {
+    PresentationState state;
+    state.mode = magnify ? PresentationMode::Magnify : PresentationMode::Fit;
+    state.zoom = magnify ? 2.0f : 1.0f;
+    state.linear_filtering = false;
+    state.stereo_depth = StereoDepth::Off;
+    return state;
+}
+
 const char *presentation_mode_name(PresentationMode mode) {
     switch (mode) {
     case PresentationMode::Fit:
@@ -50,10 +59,92 @@ bool presentation_mode_from_name(const char *name, PresentationMode &mode) {
     return false;
 }
 
+const char *stereo_depth_name(StereoDepth depth) {
+    switch (depth) {
+    case StereoDepth::Off:
+        return "Off";
+    case StereoDepth::Flat:
+        return "Flat";
+    case StereoDepth::Soft:
+        return "Soft";
+    case StereoDepth::Full:
+        return "Full";
+    }
+    return "Soft";
+}
+
+bool stereo_depth_from_name(const char *name, StereoDepth &depth) {
+    if (name == nullptr) {
+        return false;
+    }
+    if (strcmp(name, "Off") == 0) {
+        depth = StereoDepth::Off;
+        return true;
+    }
+    if (strcmp(name, "Flat") == 0) {
+        depth = StereoDepth::Flat;
+        return true;
+    }
+    if (strcmp(name, "Soft") == 0) {
+        depth = StereoDepth::Soft;
+        return true;
+    }
+    if (strcmp(name, "Full") == 0) {
+        depth = StereoDepth::Full;
+        return true;
+    }
+    return false;
+}
+
+StereoDepth next_stereo_depth(StereoDepth depth) {
+    switch (depth) {
+    case StereoDepth::Off:
+        return StereoDepth::Flat;
+    case StereoDepth::Flat:
+        return StereoDepth::Soft;
+    case StereoDepth::Soft:
+        return StereoDepth::Full;
+    case StereoDepth::Full:
+        return StereoDepth::Off;
+    }
+    return StereoDepth::Soft;
+}
+
+float stereo_eye_offset(StereoDepth depth, float slider_state) {
+    // Fractions of the visible source window, per eye. On a 400-column eye
+    // Full is about two pixels: enough to read as depth, small enough that the
+    // eyes never have to diverge.
+    float scale = 0.0f;
+    switch (depth) {
+    case StereoDepth::Off:
+        return 0.0f;
+    case StereoDepth::Flat:
+        scale = 0.0015f;
+        break;
+    case StereoDepth::Soft:
+        scale = 0.0030f;
+        break;
+    case StereoDepth::Full:
+        scale = 0.0050f;
+        break;
+    }
+
+    if (!(slider_state > 0.0f)) {
+        return 0.0f; // slider down (or NaN): the console is showing one eye
+    }
+    return scale * std::clamp(slider_state, 0.0f, 1.0f);
+}
+
 void normalize_presentation_state(PresentationState &state) {
     state.zoom = std::clamp(state.zoom, 1.0f, 4.0f);
     state.pan_x = std::clamp(state.pan_x, -1.0f, 1.0f);
     state.pan_y = std::clamp(state.pan_y, -1.0f, 1.0f);
+    if (state.stereo_depth != StereoDepth::Off &&
+        state.stereo_depth != StereoDepth::Flat &&
+        state.stereo_depth != StereoDepth::Soft &&
+        state.stereo_depth != StereoDepth::Full) {
+        state.stereo_depth = StereoDepth::Soft;
+    }
 }
 
 PresentationGeometry compute_presentation_geometry(int source_width,
